@@ -1,0 +1,17 @@
+[package]
+name = "bitty-ipc-api"
+description = "Pure API types for Bitty IPC (zero dependencies)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ipc", "bitty", "api"]
+categories = ["development-tools"]
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Zero dependencies - pure types only

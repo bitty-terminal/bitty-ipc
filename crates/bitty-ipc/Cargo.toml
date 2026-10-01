@@ -1,0 +1,27 @@
+[package]
+name = "bitty-ipc"
+description = "Generic out-of-process IPC bridge boundary for Bitty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ipc", "mcp", "bitty"]
+categories = ["development-tools"]
+publish = true
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }
+bitty-ipc-core = { path = "../bitty-ipc-core", version = "0.1" }
+bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.1" }
+bitty-ipc-devtools = { path = "../bitty-ipc-devtools", version = "0.1" }
+bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.1" }
+
+[dev-dependencies]
+bitty-ipc = { path = ".", features = ["test-support"] }

@@ -1,0 +1,17 @@
+[package]
+name = "bitty-ipc-core"
+description = "Core IPC implementation: framing, wire, limits, transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ipc", "bitty", "core"]
+categories = ["development-tools"]
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }

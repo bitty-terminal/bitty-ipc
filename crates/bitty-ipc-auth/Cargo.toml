@@ -1,0 +1,24 @@
+[package]
+name = "bitty-ipc-auth"
+description = "Platform authentication for Bitty IPC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ipc", "bitty", "auth"]
+categories = ["development-tools"]
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }
+getrandom.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
+nix = { workspace = true, features = ["fs", "socket", "user"] }
