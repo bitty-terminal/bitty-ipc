@@ -410,8 +410,8 @@ mod tests;
 pub use automation::{
     AutomationFamily, FrameAuditEntry, automation_bearer_count_for_tests,
     clear_automation_for_tests, frame_audit_len_for_tests, frame_audit_snapshot_for_tests,
-    frame_digest_publish_wanted, revoke_automation_bearer, synthetic_seq_for_tests,
-    issue_automation_bearer, issue_automation_bearer_with_ttl,
+    frame_digest_publish_wanted, issue_automation_bearer, issue_automation_bearer_with_ttl,
+    revoke_automation_bearer, synthetic_seq_for_tests,
 };
 pub use continuation::{
     Accepted, CONTINUATION_CHUNK_BYTES, CONTINUATION_DEADLINE_MS, CONTINUATION_FLAG_FINAL,

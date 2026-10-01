@@ -5,15 +5,15 @@ use super::serve::{
 };
 use super::*;
 #[cfg(unix)]
-use bitty_ipc_auth::auth::DIR_MODE;
-#[cfg(unix)]
 use bitty_ipc_api::error::IpcError;
 use bitty_ipc_api::frame::{MAX_FRAME_BYTES, encode_frame};
+use bitty_ipc_api::wire::MAX_JSON_DEPTH;
 #[cfg(unix)]
-use bitty_ipc_core::limits::RateLimiter;
+use bitty_ipc_auth::auth::DIR_MODE;
 #[cfg(unix)]
 use bitty_ipc_auth::peer::StreamIdentity;
-use bitty_ipc_api::wire::MAX_JSON_DEPTH;
+#[cfg(unix)]
+use bitty_ipc_core::limits::RateLimiter;
 #[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -808,7 +808,8 @@ fn replaced_ping_and_test_info_still_require_connected_peer() {
     dispatcher
         .register("bitty.debug/testInfo", custom_handler)
         .unwrap();
-    let context = ServeContext::with_granted(&test_server_info(), bitty_ipc_api::scope::ScopeSet::all());
+    let context =
+        ServeContext::with_granted(&test_server_info(), bitty_ipc_api::scope::ScopeSet::all());
 
     for method in ["bitty.debug/ping", "bitty.debug/testInfo"] {
         let request = DevtoolsRequest {
@@ -2360,8 +2361,10 @@ fn debug_read_surface_connection_alone_grants_nothing() {
     clear_introspection_for_tests();
     publish_grid_text(vec!["SECRET-GRID".to_string()], 0, 0, true, 5, 80, 24);
     let dispatcher = Dispatcher::with_defaults();
-    let ctx =
-        ServeContext::with_granted_for_tests(&test_server_info(), bitty_ipc_api::scope::ScopeSet::new());
+    let ctx = ServeContext::with_granted_for_tests(
+        &test_server_info(),
+        bitty_ipc_api::scope::ScopeSet::new(),
+    );
     for method in [
         "bitty.debug/getSnapshot",
         "bitty.debug/getGridText",
@@ -2635,8 +2638,10 @@ fn debug_control_denial_category_is_on_taxonomy() {
     // Regression: the control path's internal `auth` CLI class must not leak
     // onto the debug wire; a scope denial is typed `scope` (RFC taxonomy).
     let dispatcher = Dispatcher::with_defaults();
-    let ctx =
-        ServeContext::with_granted_for_tests(&test_server_info(), bitty_ipc_api::scope::ScopeSet::new());
+    let ctx = ServeContext::with_granted_for_tests(
+        &test_server_info(),
+        bitty_ipc_api::scope::ScopeSet::new(),
+    );
     let outcome = handle_envelope(
         br#"{"id":1,"method":"bitty.debug/spawnTerminal","version":"1.0","params":{"cwd":null}}"#,
         &dispatcher,
@@ -2661,8 +2666,10 @@ fn debug_error_categories_stay_on_taxonomy() {
     // accepted set. Drives the same dispatcher through parse faults, scope
     // denials, unknown methods, and version faults.
     let dispatcher = Dispatcher::with_defaults();
-    let ctx =
-        ServeContext::with_granted_for_tests(&test_server_info(), bitty_ipc_api::scope::ScopeSet::new());
+    let ctx = ServeContext::with_granted_for_tests(
+        &test_server_info(),
+        bitty_ipc_api::scope::ScopeSet::new(),
+    );
     let probes: &[&[u8]] = &[
         br#"{"id":1,"method":"bitty.debug/nope","version":"1.0"}"#,
         br#"{"id":2,"method":"bitty.debug/ping","version":"9.9"}"#,
@@ -2904,7 +2911,15 @@ fn frame_hash_auth_matrix_denies_everything_unauthorized() {
     no_trace.remove(bitty_ipc_api::scope::Scope::DebugTrace);
     let mut no_inspect = automation_scopes_capture();
     no_inspect.remove(bitty_ipc_api::scope::Scope::TerminalInspect);
-    let cases: Vec<(&str, bitty_ipc_api::scope::ScopeSet, &str, &str, String, u64, bool)> = vec![
+    let cases: Vec<(
+        &str,
+        bitty_ipc_api::scope::ScopeSet,
+        &str,
+        &str,
+        String,
+        u64,
+        bool,
+    )> = vec![
         (
             "no-bearer",
             full.clone(),
@@ -5329,7 +5344,8 @@ fn dt13_wire_fail_closed_regression_matrix() {
     assert!(response_text(&outcome).contains("UnknownMethod"));
     // Connection alone grants no debug scope: read surface denies.
     let bare_server = test_server_info();
-    let bare = ServeContext::with_granted_for_tests(&bare_server, bitty_ipc_api::scope::ScopeSet::new());
+    let bare =
+        ServeContext::with_granted_for_tests(&bare_server, bitty_ipc_api::scope::ScopeSet::new());
     let outcome = handle_envelope(
         br#"{"id":13,"method":"bitty.debug/getSnapshot","version":"1.0"}"#,
         &dispatcher,
@@ -5432,7 +5448,8 @@ fn dt11_trace_helpers_and_ctl_envelope_contract() {
     }
     // Unscoped control verbs deny on the debug-protocol taxonomy
     // (`scope`/`ScopeDenied`) and name the elevation allowlist.
-    let empty = ServeContext::with_granted_for_tests(&server, bitty_ipc_api::scope::ScopeSet::new());
+    let empty =
+        ServeContext::with_granted_for_tests(&server, bitty_ipc_api::scope::ScopeSet::new());
     let outcome = handle_envelope(
         br#"{"id":32,"method":"bitty.debug/listViews","version":"1.0"}"#,
         &dispatcher,
@@ -5620,7 +5637,10 @@ fn a3_test_exit_elevation_matrix_over_wire() {
     let server = test_server_info();
     // CLI default holds no debug scope: ScopeDenied with the elevate hint
     // (auth fails before the queue, so no teardown is queued).
-    let cli = ServeContext::with_granted_for_tests(&server, bitty_ipc_api::scope::ScopeSet::cli_default());
+    let cli = ServeContext::with_granted_for_tests(
+        &server,
+        bitty_ipc_api::scope::ScopeSet::cli_default(),
+    );
     let outcome = handle_envelope(
         br#"{"id":44,"method":"bitty.debug/testExit","version":"1.0"}"#,
         &test_mode,
@@ -5676,7 +5696,8 @@ fn a3_test_exit_teardown_routes_through_control_queue() {
     // Wire-shape identity with a sibling control verb: ungranted `testExit`
     // and ungranted `listViews` deny identically (same handler path, same
     // taxonomy, same elevation hint).
-    let empty = ServeContext::with_granted_for_tests(&server, bitty_ipc_api::scope::ScopeSet::new());
+    let empty =
+        ServeContext::with_granted_for_tests(&server, bitty_ipc_api::scope::ScopeSet::new());
     let exit_outcome = handle_envelope(
         br#"{"id":46,"method":"bitty.debug/testExit","version":"1.0"}"#,
         &test_mode,
@@ -5731,7 +5752,13 @@ fn plugin_runtime_scopes() -> (
     full.insert(DebugInspect);
     full.insert(DebugTrace);
     full.insert(DebugControl);
-    (bitty_ipc_api::scope::ScopeSet::new(), inspect, trace, control, full)
+    (
+        bitty_ipc_api::scope::ScopeSet::new(),
+        inspect,
+        trace,
+        control,
+        full,
+    )
 }
 
 fn plugin_runtime_envelope(method: &str, params: &str) -> Vec<u8> {

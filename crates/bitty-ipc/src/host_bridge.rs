@@ -68,16 +68,16 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-#[cfg(test)]
-use bitty_ipc_auth::auth::{MAX_SCOPED_ID_BYTES, VerifiedPeer};
-use bitty_ipc_api::error::IpcError;
-use bitty_ipc_api::scope::Scope;
-#[cfg(test)]
-use bitty_ipc_api::scope::ScopeSet;
 use crate::snapshot::{SnapshotData, SnapshotRequest};
 use crate::tool_dispatch::{
     MAX_TOOL_RESULT_BYTES, ToolDispatchService, ToolOutput, ToolRequest, ToolSpec,
 };
+use bitty_ipc_api::error::IpcError;
+use bitty_ipc_api::scope::Scope;
+#[cfg(test)]
+use bitty_ipc_api::scope::ScopeSet;
+#[cfg(test)]
+use bitty_ipc_auth::auth::{MAX_SCOPED_ID_BYTES, VerifiedPeer};
 
 // ── live snapshot store ─────────────────────────────────────────────────────
 
@@ -484,10 +484,10 @@ impl HostCaller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitty_ipc_api::scope::{ConsentLedger, ScopeSet};
     use crate::snapshot::{
         DetailLevel, SNAPSHOT_METHOD, SemanticZone, SnapshotRequest, SnapshotService, ZoneKind,
     };
+    use bitty_ipc_api::scope::{ConsentLedger, ScopeSet};
 
     /// Serialize the store-touching tests in this module (the live store is
     /// process-global; parallel tests must not interleave publishes).
@@ -532,7 +532,10 @@ mod tests {
 
     #[test]
     fn bounds_match_accepted_contracts() {
-        assert_eq!(MAX_LIVE_SNAPSHOTS, bitty_ipc_api::channel::MAX_PENDING_REQUESTS);
+        assert_eq!(
+            MAX_LIVE_SNAPSHOTS,
+            bitty_ipc_api::channel::MAX_PENDING_REQUESTS
+        );
         assert_eq!(HostCaller::MAX_CLIENT_ID_BYTES, MAX_SCOPED_ID_BYTES);
         assert_eq!(MAX_TOOL_RESULT_BYTES, 16 * 1024);
         assert_eq!(

@@ -6,4 +6,4 @@ pub mod limits;
 pub mod transport;
 
 pub use limits::RateLimiter;
-pub use transport::{StdioTransportStub, DEFAULT_TRANSPORT_CAPACITY, MAX_TRANSPORT_CAPACITY};
+pub use transport::{DEFAULT_TRANSPORT_CAPACITY, MAX_TRANSPORT_CAPACITY, StdioTransportStub};

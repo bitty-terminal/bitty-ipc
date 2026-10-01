@@ -70,8 +70,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use bitty_ipc_api::error::IpcError;
 use crate::snapshot::ZoneKind;
+use bitty_ipc_api::error::IpcError;
 
 // ── bounds (accepted-contract sources inline) ───────────────────────────────
 
@@ -335,7 +335,10 @@ mod tests {
             MAX_FRAGMENT_TEXT_BYTES,
             crate::bridge::MAX_BRIDGE_PARAMS_BYTES
         );
-        assert_eq!(MAX_PENDING_FRAGMENTS, bitty_ipc_api::channel::MAX_PENDING_REQUESTS);
+        assert_eq!(
+            MAX_PENDING_FRAGMENTS,
+            bitty_ipc_api::channel::MAX_PENDING_REQUESTS
+        );
         assert_eq!(
             MAX_PENDING_FRAGMENTS,
             crate::execution::MAX_TRACKED_EXECUTIONS

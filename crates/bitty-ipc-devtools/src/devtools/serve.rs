@@ -3,14 +3,14 @@ use super::*;
 use super::handlers::json_escape_into;
 use super::json::truncate_chars;
 
+use bitty_ipc_api::error::IpcError;
+#[cfg(unix)]
+use bitty_ipc_api::frame::{MAX_FRAME_BYTES, encode_frame};
 use bitty_ipc_auth::auth::VerifiedPeer;
 #[cfg(unix)]
 use bitty_ipc_auth::auth::{DIR_MODE, SOCKET_MODE};
 #[cfg(all(test, unix))]
 use bitty_ipc_auth::auth::{PeerCredentials, verify_peer_uid};
-use bitty_ipc_api::error::IpcError;
-#[cfg(unix)]
-use bitty_ipc_api::frame::{MAX_FRAME_BYTES, encode_frame};
 use bitty_ipc_core::limits::RC9_MAX_CONNECTIONS;
 #[cfg(unix)]
 use bitty_ipc_core::limits::RateLimiter;

@@ -13,6 +13,12 @@ publish = true
 [lints]
 workspace = true
 
+[features]
+# Exposes test-only constructors (`PeerCredentials::new`, `VerifiedPeer::attested`)
+# to downstream crates' own test binaries, where `#[cfg(test)]` from this
+# crate would not apply. Never enabled in a production build.
+test-support = []
+
 [dependencies]
 bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
 getrandom.workspace = true
