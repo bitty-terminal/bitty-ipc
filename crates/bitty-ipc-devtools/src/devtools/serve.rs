@@ -633,7 +633,7 @@ impl ServeContext {
     /// that reads the grid must grant `terminal.inspect` explicitly.
     ///
     /// Test support only (#1519), like [`Self::with_granted`].
-    #[cfg(any(test, feature = "test-support"))]
+    /// Exported for external tests in bitty-runtime and bitty-terminal.
     #[must_use]
     pub fn with_granted_session(
         server: &ServerInfo,
