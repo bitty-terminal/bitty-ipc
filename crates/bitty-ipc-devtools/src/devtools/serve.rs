@@ -607,7 +607,7 @@ impl ServeContext {
     /// Test support only (#1519): the context has no server-owned authority,
     /// so production builds do not compile it. Served connections use
     /// [`Self::with_connection_grant`].
-    #[cfg(any(test, feature = "test-support"))]
+    /// Exported for external tests in bitty-runtime and bitty-terminal.
     #[must_use]
     pub fn with_granted(server: &ServerInfo, granted: bitty_ipc_api::scope::ScopeSet) -> Self {
         Self {
