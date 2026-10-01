@@ -56,7 +56,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use bitty_ipc_api::error::IpcError;
-use bitty_ipc_api::scope::{ScopeSet, authorize_method, required_scope_for_method, validate_method_name};
+use bitty_ipc_api::scope::{
+    ScopeSet, authorize_method, required_scope_for_method, validate_method_name,
+};
 
 // ── method + budget constants (accepted-contract sources inline) ────────────
 

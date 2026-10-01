@@ -70,7 +70,10 @@ pub struct PeerCredentials {
 }
 
 impl PeerCredentials {
-    #[cfg(test)]
+    /// Test-only constructor for fixtures in this crate and downstream
+    /// dependents (enabled via `test-support`, parity with `bitty-ipc`'s own
+    /// `test-support` feature; never compiled into a production build).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(uid: u32, gid: u32, pid: i32) -> Self {
         Self { uid, gid, pid }
     }
@@ -125,8 +128,11 @@ impl VerifiedPeer {
     /// Test-only constructor for endpoint compatibility fixtures.
     ///
     /// The constructor re-verifies UID equality and is not compiled into the
-    /// production library.
-    #[cfg(test)]
+    /// production library. Enabled via `test-support` so downstream
+    /// `bitty-ipc-devtools` fixtures (which require real UID verification,
+    /// not a forged marker) can mint one outside this crate's own test
+    /// binary.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn attested(peer: PeerCredentials, runtime_uid: u32) -> Result<Self, IpcError> {
         verify_peer_uid(peer, runtime_uid)?;
         Ok(Self {
@@ -481,7 +487,10 @@ mod tests {
         let peer = PeerCredentials::new(1001, 1000, 42);
         let err = verify_peer_uid(peer, 1000).unwrap_err();
         assert!(matches!(err, IpcError::Unauthenticated { .. }));
-        assert_eq!(err.error_class(), crate::error::ErrorClass::Unauthenticated);
+        assert_eq!(
+            err.error_class(),
+            bitty_ipc_api::error::ErrorClass::Unauthenticated
+        );
     }
 
     #[test]

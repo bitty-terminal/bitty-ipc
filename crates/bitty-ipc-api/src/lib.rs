@@ -35,8 +35,8 @@ pub mod scope;
 pub mod wire;
 
 pub use channel::{
-    BoundedChannel, IpcEndpoint, IpcRequest, IpcResponse, RequestId, DEFAULT_REQUEST_CAPACITY,
-    DEFAULT_RESPONSE_CAPACITY, MAX_CHANNEL_CAPACITY, MAX_METHOD_BYTES, MAX_PENDING_REQUESTS,
+    BoundedChannel, DEFAULT_REQUEST_CAPACITY, DEFAULT_RESPONSE_CAPACITY, IpcEndpoint, IpcRequest,
+    IpcResponse, MAX_CHANNEL_CAPACITY, MAX_METHOD_BYTES, MAX_PENDING_REQUESTS, RequestId,
 };
 pub use error::{ErrorClass, IpcError};
 pub use frame::{Frame, Framer, MAX_BUFFERED_BYTES, MAX_FRAME_BYTES, decode_frame, encode_frame};

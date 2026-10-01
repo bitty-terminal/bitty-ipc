@@ -60,7 +60,9 @@
 //! workspace crate beyond `bitty-ipc` itself. No network, no new external
 //! crates, no AI vocabulary.
 
-use bitty_ipc_api::channel::{DEFAULT_REQUEST_TIMEOUT_MS, IpcEndpoint, IpcRequest, IpcResponse, RequestId};
+use bitty_ipc_api::channel::{
+    DEFAULT_REQUEST_TIMEOUT_MS, IpcEndpoint, IpcRequest, IpcResponse, RequestId,
+};
 use bitty_ipc_api::error::IpcError;
 use bitty_ipc_api::scope::{
     ConsentLedger, Scope, ScopeSet, authorize_method, required_scope_for_method,
@@ -311,7 +313,10 @@ mod tests {
             MAX_BRIDGE_PARAMS_BYTES,
             crate::tool_dispatch::MAX_TOOL_ARGS_BYTES
         );
-        assert_eq!(MAX_BRIDGE_CLIENT_ID_BYTES, bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES);
+        assert_eq!(
+            MAX_BRIDGE_CLIENT_ID_BYTES,
+            bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES
+        );
         assert_eq!(MAX_BRIDGE_PARAMS_BYTES, 16 * 1024);
         assert_eq!(MAX_BRIDGE_CLIENT_ID_BYTES, 64);
     }

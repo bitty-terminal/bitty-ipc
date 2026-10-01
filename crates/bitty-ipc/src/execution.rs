@@ -1262,13 +1262,19 @@ mod tests {
         );
         assert_eq!(MAX_EXEC_CWD_BYTES, crate::ctl::MAX_CTL_CWD_LEN);
         assert_eq!(MAX_EXEC_ENV_VARS, crate::devtools::MAX_INPUT_RING);
-        assert_eq!(MAX_EXEC_ENV_NAME_BYTES, bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES);
+        assert_eq!(
+            MAX_EXEC_ENV_NAME_BYTES,
+            bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES
+        );
         assert_eq!(MAX_EXEC_ENV_VALUE_BYTES, crate::ctl::MAX_CTL_CWD_LEN);
         assert_eq!(
             DEFAULT_EXEC_TIMEOUT_MS,
             bitty_ipc_api::channel::DEFAULT_REQUEST_TIMEOUT_MS
         );
-        assert_eq!(MAX_EXEC_TIMEOUT_MS, bitty_ipc_api::channel::MAX_REQUEST_TIMEOUT_MS);
+        assert_eq!(
+            MAX_EXEC_TIMEOUT_MS,
+            bitty_ipc_api::channel::MAX_REQUEST_TIMEOUT_MS
+        );
         assert_eq!(
             MAX_EXEC_OUTPUT_BUDGET_BYTES,
             bitty_ipc_core::limits::RC10_MAX_SNAPSHOT_BYTES
@@ -1281,9 +1287,18 @@ mod tests {
             MAX_EXEC_EVIDENCE_REF_BYTES,
             crate::tool_dispatch::MAX_TOOL_SUMMARY_BYTES
         );
-        assert_eq!(MAX_EXEC_TARGET_BYTES, bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES);
-        assert_eq!(MAX_EXEC_CLIENT_ID_BYTES, bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES);
-        assert_eq!(MAX_TRACKED_EXECUTIONS, bitty_ipc_api::channel::MAX_PENDING_REQUESTS);
+        assert_eq!(
+            MAX_EXEC_TARGET_BYTES,
+            bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES
+        );
+        assert_eq!(
+            MAX_EXEC_CLIENT_ID_BYTES,
+            bitty_ipc_auth::auth::MAX_SCOPED_ID_BYTES
+        );
+        assert_eq!(
+            MAX_TRACKED_EXECUTIONS,
+            bitty_ipc_api::channel::MAX_PENDING_REQUESTS
+        );
         assert_eq!(EXECUTION_SCOPE, Scope::ProcessSpawn);
     }
 

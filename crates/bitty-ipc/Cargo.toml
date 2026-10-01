@@ -25,3 +25,4 @@ bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.0.1" }
 
 [dev-dependencies]
 bitty-ipc = { path = ".", features = ["test-support"] }
+bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1", features = ["test-support"] }
