@@ -213,7 +213,6 @@ fn validate_bearer_shape(token: &str) -> Result<(), ()> {
 ///
 /// Returns `InvalidRequest` for bad session/terminal ids and `LimitExceeded`
 /// when the store is at capacity (fail-closed, no silent eviction).
-#[cfg(any(test, feature = "test-support"))]
 pub fn issue_automation_bearer(
     session_id: &str,
     terminal_id: &str,
@@ -247,7 +246,6 @@ pub fn issue_automation_bearer(
 ///
 /// Same as [`issue_automation_bearer`], plus `InvalidRequest` when `ttl_ms`
 /// is zero or exceeds the cap.
-#[cfg(any(test, feature = "test-support"))]
 pub fn issue_automation_bearer_with_ttl(
     session_id: &str,
     terminal_id: &str,
