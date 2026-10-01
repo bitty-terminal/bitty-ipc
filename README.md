@@ -101,6 +101,7 @@ just fmt-check
 just clippy
 just test
 just typecheck
+just actionlint
 ```
 
 Toolchain channel is pinned in [`rust-toolchain.toml`](rust-toolchain.toml); MSRV is `1.85` (`rust-version` in the workspace root `Cargo.toml`).
