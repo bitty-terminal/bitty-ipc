@@ -17,7 +17,7 @@ workspace = true
 bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
 bitty-ipc-core = { path = "../bitty-ipc-core", version = "0.0.1" }
 bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1" }
-base16ct = { version = "0.3.0", features = ["alloc"] }
+base16ct = { version = "1.0.0", features = ["alloc"] }
 getrandom.workspace = true
 sha2 = "0.11.0-pre.5"
 serde = { version = "1.0.218", features = ["derive"] }
