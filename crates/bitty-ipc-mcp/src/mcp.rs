@@ -290,7 +290,8 @@ fn validate_mcp_method(method: &str) -> Result<(), IpcError> {
 /// # Example
 ///
 /// ```rust
-/// use bitty_ipc::mcp::{McpClientConfig, McpClientStub};
+/// use bitty_ipc_mcp::mcp::{McpClientConfig, McpClientStub};
+/// use bitty_ipc_core::transport::StdioTransportStub;
 ///
 /// let mut client = McpClientStub::new(McpClientConfig::default()).expect("valid config");
 /// let now = 0;
@@ -299,7 +300,7 @@ fn validate_mcp_method(method: &str) -> Result<(), IpcError> {
 /// assert!(!client.is_closed());
 ///
 /// // Simulate a server response arriving as a frame payload.
-/// let mut server = bitty_ipc::transport::StdioTransportStub::new(8);
+/// let mut server = StdioTransportStub::new(8);
 /// client.transport_mut().forward_to(&mut server);
 /// // ... server would handle and reply, then reply frames flow back ...
 /// ```
