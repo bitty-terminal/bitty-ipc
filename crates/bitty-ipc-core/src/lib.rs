@@ -8,4 +8,4 @@ pub mod transport;
 pub use limits::{
     RC9_BURST_LIMIT, RC9_INTERVAL_MS, RC9_MAX_CONNECTIONS, RC9_REPLENISH, RateLimiter,
 };
-pub use transport::*;
+pub use transport::{MAX_PENDING_REQUESTS, MAX_PENDING_RESPONSES};
