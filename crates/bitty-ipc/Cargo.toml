@@ -17,11 +17,11 @@ workspace = true
 test-support = []
 
 [dependencies]
-bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }
-bitty-ipc-core = { path = "../bitty-ipc-core", version = "0.1" }
-bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.1" }
-bitty-ipc-devtools = { path = "../bitty-ipc-devtools", version = "0.1" }
-bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.1" }
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
+bitty-ipc-core = { path = "../bitty-ipc-core", version = "0.0.1" }
+bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1" }
+bitty-ipc-devtools = { path = "../bitty-ipc-devtools", version = "0.0.1" }
+bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.0.1" }
 
 [dev-dependencies]
 bitty-ipc = { path = ".", features = ["test-support"] }

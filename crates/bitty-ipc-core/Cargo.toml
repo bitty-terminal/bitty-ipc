@@ -14,4 +14,4 @@ publish = true
 workspace = true
 
 [dependencies]
-bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }

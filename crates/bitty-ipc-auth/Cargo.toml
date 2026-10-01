@@ -14,7 +14,7 @@ publish = true
 workspace = true
 
 [dependencies]
-bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.1" }
+bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
 getrandom.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]

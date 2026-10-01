@@ -16,7 +16,7 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "bitty-ipc"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitty-ipc",
  "bitty-ipc-api",
@@ -28,11 +28,11 @@ dependencies = [
 
 [[package]]
 name = "bitty-ipc-api"
-version = "0.1.0"
+version = "0.0.1"
 
 [[package]]
 name = "bitty-ipc-auth"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitty-ipc-api",
  "getrandom",
@@ -42,14 +42,14 @@ dependencies = [
 
 [[package]]
 name = "bitty-ipc-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitty-ipc-api",
 ]
 
 [[package]]
 name = "bitty-ipc-devtools"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitty-ipc-api",
  "bitty-ipc-auth",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "bitty-ipc-mcp"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitty-ipc-api",
  "bitty-ipc-auth",
