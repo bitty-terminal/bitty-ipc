@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 use bitty_ipc_api::error::IpcError;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
@@ -134,7 +134,7 @@ pub(super) fn automation_store() -> &'static Mutex<AutomationStore> {
 }
 
 /// Random bytes in one bearer token (128 bits of CSPRNG output).
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 const BEARER_TOKEN_BYTES: usize = 16;
 
 /// Fill `dest` from the platform CSPRNG, on every platform.
@@ -147,14 +147,14 @@ const BEARER_TOKEN_BYTES: usize = 16;
 /// platform that cannot produce unpredictable bytes must fail the issuance
 /// closed rather than mint a token derived from anything weaker (CTX-0792,
 /// #1403).
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 fn fill_secure_random(dest: &mut [u8]) -> Result<(), IpcError> {
     getrandom::fill(dest).map_err(|err| IpcError::Unavailable {
         reason: format!("secure bearer source unavailable: {err}"),
     })
 }
 
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 fn random_bearer_token() -> Result<String, IpcError> {
     let mut bytes = [0u8; BEARER_TOKEN_BYTES];
     fill_secure_random(&mut bytes)?;
@@ -166,7 +166,7 @@ fn random_bearer_token() -> Result<String, IpcError> {
 }
 
 /// Validate a session id for bearer binding (1..=64 chars, no NUL/control).
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 fn validate_session_id(session_id: &str) -> Result<(), IpcError> {
     if session_id.is_empty() || session_id.len() > 64 {
         return Err(IpcError::InvalidRequest {
@@ -316,13 +316,13 @@ pub(crate) fn issue_automation_bearer_for_connection(
 ///
 /// The context-free legacy minters pass an empty principal and generation 0,
 /// which is why such a bearer can never satisfy an authority-bound check.
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 struct BearerBinding {
     principal_id: String,
     consent_generation: u64,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 impl BearerBinding {
     fn unbound() -> Self {
         Self {
@@ -332,7 +332,7 @@ impl BearerBinding {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+// Exported for external tests (bitty-runtime, bitty-terminal)
 fn issue_automation_bearer_internal(
     session_id: &str,
     terminal_id: &str,
