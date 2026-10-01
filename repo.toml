@@ -1,0 +1,21 @@
+# bitty-ipc: workspace identity descriptor (kind/lang/role mirror workspace.toml).
+[repo]
+name = "bitty-ipc"
+kind = "extension"
+lang = "rust"
+role = "L1 Rust Core Extension: IPC bridge layer (api + auth + core + devtools + mcp), default-off"
+owner = "bitty-core"
+docs = "bitty-terminal-docs"
+
+[contracts.provides]
+ipc-api = "crates/bitty-ipc-api" # light contract: IpcMessage/IpcChannel/Error defs, zero impl deps
+ipc-auth = "crates/bitty-ipc-auth" # authentication/authorization for IPC channels
+ipc-core = "crates/bitty-ipc-core" # core IPC runtime: message routing/serialization
+ipc-devtools = "crates/bitty-ipc-devtools" # DevTools protocol bridge
+ipc-mcp = "crates/bitty-ipc-mcp" # MCP protocol bridge
+ipc = "crates/bitty-ipc" # umbrella crate: re-exports all IPC components
+
+[contracts.consumes]
+core-ontology = "bitty-docs: ADR-0013" # IPC identity terms reused in capability audit records
+devtools-rfc = "bitty-ai-docs: OQ-019" # DevTools protocol specification
+ipc-agent-rfc = "bitty-ai-docs: OQ-018" # IPC/Agent bridge specification
