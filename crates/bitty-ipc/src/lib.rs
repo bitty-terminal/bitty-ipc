@@ -19,4 +19,9 @@ pub use bitty_ipc_api::*;
 pub use bitty_ipc_auth::*;
 pub use bitty_ipc_core::*;
 pub use bitty_ipc_devtools::*;
+
+// `bitty-ipc-mcp` is default-off (`mcp` feature): Bitty Core uses nothing
+// from it outside tests (core-audit-2026-10-02.md finding 5;
+// `bitty-terminal-docs` architecture/core-boundaries.md ~198-203).
+#[cfg(feature = "mcp")]
 pub use bitty_ipc_mcp::*;
