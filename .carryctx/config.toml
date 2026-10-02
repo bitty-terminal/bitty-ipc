@@ -14,7 +14,7 @@ on_task_completed = "when_idle"
 on_task_cancelled = "keep"
 require_clean = true
 require_no_active_session = true
-delete_branch = "never"
+delete_branch = "when_removed"
 
 [session]
 stale_after = "2h"
@@ -46,4 +46,4 @@ verbose = false
 [agent]
 
 [verification]
-commands = []
+commands = ["just check"]
