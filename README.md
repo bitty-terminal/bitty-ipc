@@ -17,7 +17,7 @@ bitty-ipc-core       # Framing, wire, limits, transport
     ↑
 bitty-ipc-auth       # Platform auth (rustix/nix)
 bitty-ipc-devtools   # DevTools protocol
-bitty-ipc-mcp        # MCP adapter
+bitty-ipc-mcp        # MCP adapter (optional, `mcp` feature)
     ↑
 bitty-ipc            # Full implementation (BridgeClient)
 ```
@@ -30,7 +30,7 @@ bitty-ipc            # Full implementation (BridgeClient)
 | [`bitty-ipc-core`](crates/bitty-ipc-core) | Core implementation: bounded framing (encode/decode), wire protocol v1, rate limits (RC-9/RC-10), transport stubs, no platform-specific code. |
 | [`bitty-ipc-auth`](crates/bitty-ipc-auth) | Platform authentication: peer credential verification via `rustix` (Linux) and `nix` (macOS/BSD), UID verification, child token management, socket/directory mode checks. |
 | [`bitty-ipc-devtools`](crates/bitty-ipc-devtools) | DevTools protocol: `bitty.debug/*` method dispatch, snapshot/ctl/tool_dispatch protocols, headless request parsing. |
-| [`bitty-ipc-mcp`](crates/bitty-ipc-mcp) | MCP adapter: `McpClientStub` with bounded framing, correlation, deterministic timeouts. |
+| [`bitty-ipc-mcp`](crates/bitty-ipc-mcp) | MCP adapter: `McpClientStub` with bounded framing, correlation, deterministic timeouts. Optional on the facade (`mcp` feature, default-off). |
 | [`bitty-ipc`](crates/bitty-ipc) | Full implementation: `BridgeClient` composing method registry, scope authorization, consent ledger, bounded endpoint. The published boundary for `bitty-ai`, devtools, and out-of-process consumers. |
 
 ## Use Cases
@@ -47,6 +47,18 @@ bitty-ipc            # Full implementation (BridgeClient)
 [features]
 default = []
 test-support = []  # Hermetic test entry points (dev-only; also on bitty-ipc-auth)
+mcp = ["bitty-ipc-mcp"]  # Optional MCP adapter (McpClientStub); default-off
+```
+
+`bitty-ipc-mcp` is an optional dependency gated behind the `mcp` feature,
+following the default-off posture `bitty-terminal-docs`
+`architecture/core-boundaries.md` describes for `ipc-mcp`. Bitty Core uses
+nothing from the MCP adapter outside tests, so it stays out of the release
+dependency tree unless a consumer opts in:
+
+```toml
+[dependencies]
+bitty-ipc = { git = "https://github.com/bitty-terminal/bitty-ipc", rev = "<sha>", features = ["mcp"] }
 ```
 
 ## Consuming from Bitty Core

@@ -14,14 +14,20 @@ publish = true
 workspace = true
 
 [features]
+default = []
 test-support = []
+# Optional MCP adapter (`bitty-ipc-mcp`). Default-off per
+# `bitty-terminal-docs` architecture/core-boundaries.md (~198-203): Bitty
+# Core uses nothing from `ipc-mcp` outside tests (CTX-0004,
+# core-audit-2026-10-02.md finding 5).
+mcp = ["bitty-ipc-mcp"]
 
 [dependencies]
 bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
 bitty-ipc-core = { path = "../bitty-ipc-core", version = "0.0.1" }
 bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1" }
 bitty-ipc-devtools = { path = "../bitty-ipc-devtools", version = "0.0.1" }
-bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.0.1" }
+bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.0.1", optional = true }
 
 [dev-dependencies]
 bitty-ipc = { path = ".", features = ["test-support"] }
