@@ -433,7 +433,8 @@ fn dispatcher_registers_new_methods_for_follow_up() {
     // (getGridText, getInputRing, getModifiers, getFocus) plus CTX-0171
     // control (listWindows, listViews, listTerminals, spawnTerminal,
     // closeTerminal, sendInput, getTerminalText, splitView, focusView,
-    // reloadConfig) plus CTX-0257 workspace entry (listWorkspaces,
+    // reloadConfig) plus CTX-1117 panel entry (listPanels, issue #1967)
+    // plus CTX-0257 workspace entry (listWorkspaces,
     // createWorkspace, closeWorkspace, focusWorkspace) plus CTX-0259 move
     // (moveWorkspace) plus CTX-0188
     // automation (synthesizeInput,
@@ -444,7 +445,7 @@ fn dispatcher_registers_new_methods_for_follow_up() {
     // getPlugin, listSubscriptions, getBudgets, getQueueSnapshot,
     // listHandles, streamEvents, suspendHandler, resumePlugin,
     // disposeGeneration).
-    assert_eq!(dispatcher.method_count(), 43);
+    assert_eq!(dispatcher.method_count(), 44);
     assert!(dispatcher.contains("bitty.debug/getGridText"));
     assert!(dispatcher.contains("bitty.debug/getInputRing"));
     assert!(dispatcher.contains("bitty.debug/getModifiers"));

@@ -32,6 +32,7 @@
 //! | `terminal text` | `bitty.debug/getTerminalText` | `terminal.inspect` |
 //! | `view split` | `bitty.debug/splitView` | `view.manage` |
 //! | `view focus` | `bitty.debug/focusView` | `view.manage` |
+//! | `panel list` | `bitty.debug/listPanels` | `view.inspect` |
 //! | `workspace list` | `bitty.debug/listWorkspaces` | `view.inspect` |
 //! | `workspace new` | `bitty.debug/createWorkspace` | `view.manage` |
 //! | `workspace close` | `bitty.debug/closeWorkspace` | `terminal.manage` (elevation) |
@@ -803,6 +804,8 @@ pub const METHOD_GET_TERMINAL_TEXT: &str = "bitty.debug/getTerminalText";
 pub const METHOD_SPLIT_VIEW: &str = "bitty.debug/splitView";
 /// Wire method for `ctl view focus`.
 pub const METHOD_FOCUS_VIEW: &str = "bitty.debug/focusView";
+/// Wire method for `ctl panel list`.
+pub const METHOD_LIST_PANELS: &str = "bitty.debug/listPanels";
 /// Wire method for `ctl workspace list`.
 pub const METHOD_LIST_WORKSPACES: &str = "bitty.debug/listWorkspaces";
 /// Wire method for `ctl workspace new`.
@@ -834,6 +837,7 @@ pub fn all_control_methods() -> &'static [&'static str] {
         METHOD_GET_TERMINAL_TEXT,
         METHOD_SPLIT_VIEW,
         METHOD_FOCUS_VIEW,
+        METHOD_LIST_PANELS,
         METHOD_LIST_WORKSPACES,
         METHOD_NEW_WORKSPACE,
         METHOD_CLOSE_WORKSPACE,
@@ -861,7 +865,10 @@ pub fn all_test_mode_control_methods() -> &'static [&'static str] {
 #[must_use]
 pub fn required_scope_for_ctl_method(method: &str) -> Option<Scope> {
     match method {
-        METHOD_LIST_WINDOWS | METHOD_LIST_VIEWS => Some(Scope::ViewInspect),
+        // Read-only inventory (CTX-0171 lists plus CTX-1117 panel list,
+        // issue #1967): tiled panels are layout leaves, so `panel list`
+        // rides `view.inspect` like `view list`, no elevation.
+        METHOD_LIST_WINDOWS | METHOD_LIST_VIEWS | METHOD_LIST_PANELS => Some(Scope::ViewInspect),
         METHOD_LIST_TERMINALS | METHOD_GET_TERMINAL_TEXT => Some(Scope::TerminalInspect),
         METHOD_SEND_INPUT => Some(Scope::TerminalInput),
         METHOD_SPAWN_TERMINAL | METHOD_CLOSE_TERMINAL => Some(Scope::TerminalManage),
@@ -2152,7 +2159,12 @@ mod tests {
         );
         // Workspace entry (CTX-0257): list rides view.inspect, new/focus
         // ride view.manage (no elevation), close needs terminal.manage
-        // (kill power, elevation — like terminal close).
+        // (kill power, elevation — like terminal close). CTX-1117 panel
+        // list (issue #1967) rides view.inspect like view list.
+        assert_eq!(
+            required_scope_for_ctl_method(METHOD_LIST_PANELS),
+            Some(Scope::ViewInspect)
+        );
         assert_eq!(
             required_scope_for_ctl_method(METHOD_LIST_WORKSPACES),
             Some(Scope::ViewInspect)
@@ -2196,6 +2208,8 @@ mod tests {
         // CTX-0257: workspace list/new/focus ride the view scopes (no
         // elevation); workspace close needs terminal.manage like the other
         // kill verb. CTX-0259 move rides view.manage (no kill, no elevation).
+        // CTX-1117 panel list (issue #1967) needs no elevation either.
+        assert!(authorize_ctl_method(METHOD_LIST_PANELS, &cli).is_ok());
         assert!(authorize_ctl_method(METHOD_LIST_WORKSPACES, &cli).is_ok());
         assert!(authorize_ctl_method(METHOD_NEW_WORKSPACE, &cli).is_ok());
         assert!(authorize_ctl_method(METHOD_FOCUS_WORKSPACE, &cli).is_ok());
@@ -2288,6 +2302,7 @@ mod tests {
     fn mcp_readonly_cannot_send_or_manage() {
         let mcp = ScopeSet::mcp_default();
         assert!(authorize_ctl_method(METHOD_LIST_TERMINALS, &mcp).is_ok());
+        assert!(authorize_ctl_method(METHOD_LIST_PANELS, &mcp).is_ok());
         assert!(authorize_ctl_method(METHOD_LIST_WORKSPACES, &mcp).is_ok());
         assert!(authorize_ctl_method(METHOD_SEND_INPUT, &mcp).is_err());
         assert!(authorize_ctl_method(METHOD_NEW_WORKSPACE, &mcp).is_err());

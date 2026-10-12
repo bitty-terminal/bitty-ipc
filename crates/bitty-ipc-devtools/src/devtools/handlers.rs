@@ -65,7 +65,8 @@ impl Dispatcher {
     /// `getFocus`) plus CTX-0171 runtime control (`listWindows`,
     /// `listViews`, `listTerminals`, `spawnTerminal`, `closeTerminal`,
     /// `sendInput`, `getTerminalText`, `splitView`, `focusView`,
-    /// `reloadConfig`) plus CTX-0257 workspace entry (`listWorkspaces`,
+    /// `reloadConfig`) plus CTX-1117 panel entry (`listPanels`, issue #1967)
+    /// plus CTX-0257 workspace entry (`listWorkspaces`,
     /// `createWorkspace`, `closeWorkspace`, `focusWorkspace`) plus CTX-0259
     /// workspace move (`moveWorkspace`) plus issue #1333 switcher ops
     /// (`renameWorkspace`, `movePanel`) plus CTX-0188
@@ -123,6 +124,7 @@ impl Dispatcher {
             (crate::ctl::METHOD_GET_TERMINAL_TEXT, handle_control),
             (crate::ctl::METHOD_SPLIT_VIEW, handle_control),
             (crate::ctl::METHOD_FOCUS_VIEW, handle_control),
+            (crate::ctl::METHOD_LIST_PANELS, handle_control),
             (crate::ctl::METHOD_LIST_WORKSPACES, handle_control),
             (crate::ctl::METHOD_NEW_WORKSPACE, handle_control),
             (crate::ctl::METHOD_CLOSE_WORKSPACE, handle_control),
