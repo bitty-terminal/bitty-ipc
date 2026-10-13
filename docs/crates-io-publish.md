@@ -26,6 +26,9 @@ after the registry token rotation lands (see the Blockers section).
 - The registry token rotation recorded upstream is complete. Never publish
   with a token that may have been exposed; each publish is permanent
   (yank is the only undo).
+- Immediately before publishing, re-check that all six crate names are still
+  free on the crates.io API. Names are first-come-first-served; the readiness
+  check above is point-in-time and the publish may run days after this note.
 - The working tree is clean and on `main`; the crates to publish are
   unchanged since the dry-run verification above.
 
@@ -53,7 +56,10 @@ change feature wiring.
 
 ## Verification
 
-- `cargo search bitty-ipc-api --limit 1` shows each version after its step.
+- After each step, confirm the just-published crate is visible in the index
+  (`cargo search <crate> --limit 1` for the crate from that step; repeat for
+  all six: `bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`,
+  `bitty-ipc-devtools`, `bitty-ipc-mcp`, `bitty-ipc`).
 - Every crate page on crates.io shows "Builds on docs.rs" once the docs
   build finishes.
 - Downstream check: a clean scratch crate depending on
