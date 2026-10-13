@@ -17,9 +17,8 @@ after the registry token rotation lands (see the Blockers section).
   "no matching package named `bitty-ipc-api` found", which is the expected
   ordered-publish signal: every path dependency already carries an explicit
   `version = "0.0.1"`, so no manifest change is needed.
-- `bitty-ipc-devtools` resolves `sha2` to the locked `0.11.0` release, which
-  exists on crates.io; the `0.11.0-pre.5` requirement line needs no change
-  for publishing.
+- `bitty-ipc-devtools` requires `sha2 = "0.11"`, resolved to the locked
+  `0.11.0` release, which exists on crates.io.
 
 ## Prerequisites
 
