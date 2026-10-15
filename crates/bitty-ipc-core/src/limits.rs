@@ -223,6 +223,31 @@ pub fn check_connection_cap(active: usize) -> Result<(), IpcError> {
     Ok(())
 }
 
+/// Plan an RC-10 chunk sequence for a logical payload of `total_bytes`.
+///
+/// Returns the number of `chunk` frames (`seq`/`total`) needed to carry the
+/// payload when every chunk holds at most [`RC10_CHUNK_CEILING`] decoded
+/// bytes: `ceil(total_bytes / RC10_CHUNK_CEILING)`, `0` for an empty payload.
+/// Saturates instead of overflowing on hostile sizes.
+///
+/// Size disposition for the S2 over-frame cases (wiring item 3): a logical
+/// payload that fits neither one `256 KiB` frame nor the `1 MiB` RC-9 cap
+/// crosses as this many RC-10 chunks (each frame `<= 256 KiB`, sequenced with
+/// `seq`/`total` per RFC §Agent auth, consent, and streaming), never as one
+/// logical request past the RC-9 cap — a logical request that would exceed
+/// `1 MiB` must be chunked client-side (RFC §Rate limits and budgets, RC-9
+/// row). Per-chunk ceiling enforcement stays in
+/// `bitty_ipc_api::wire::validate_chunk`.
+#[must_use]
+pub fn chunks_required(total_bytes: usize) -> u64 {
+    if total_bytes == 0 {
+        return 0;
+    }
+    let bytes = total_bytes as u64;
+    let ceiling = RC10_CHUNK_CEILING as u64;
+    bytes.div_ceil(ceiling)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +341,49 @@ mod tests {
         assert_eq!(RC9_MAX_CONNECTIONS, 16);
         assert_eq!(RC9_PAYLOAD_CAP_BYTES, 1024 * 1024);
         assert_eq!(RC10_CHUNK_CEILING, 256 * 1024);
+    }
+
+    #[test]
+    fn chunks_required_plans_rc10_sequences() {
+        assert_eq!(chunks_required(0), 0);
+        assert_eq!(chunks_required(1), 1);
+        assert_eq!(chunks_required(RC10_CHUNK_CEILING), 1);
+        assert_eq!(chunks_required(RC10_CHUNK_CEILING + 1), 2);
+        assert_eq!(chunks_required(2 * RC10_CHUNK_CEILING), 2);
+        // Every planned count is addressable: seq 0 < total holds for the
+        // returned count under validate_chunk semantics.
+        for total in [1, 1000, RC10_CHUNK_CEILING, 3 * RC10_CHUNK_CEILING + 7] {
+            let n = chunks_required(total);
+            assert!(n >= 1);
+            assert!(bitty_ipc_api::wire::validate_chunk(0, n as u32, &[0; 8]).is_ok());
+        }
+    }
+
+    #[test]
+    fn complete_request_worst_case_chunks_not_one_request() {
+        // S2 CompleteRequest worst case (cited bounds, JSON overhead excluded):
+        // 128 messages x 16 KiB + 128 refs x 64 B + 32 tools x 64 B.
+        let worst_case: usize = 128 * (16 * 1024) + 128 * 64 + 32 * 64;
+        assert_eq!(worst_case, 2_107_392);
+        // Past both the 256 KiB frame and the 1 MiB RC-9 logical cap, so the
+        // disposition is an RC-10 chunk sequence, never one logical request.
+        assert!(worst_case > bitty_ipc_api::frame::MAX_FRAME_BYTES);
+        assert!(worst_case > RC9_PAYLOAD_CAP_BYTES);
+        assert!(check_payload_cap(worst_case).is_err());
+        assert_eq!(chunks_required(worst_case), 9);
+    }
+
+    #[test]
+    fn select_chain_scales_with_chunk_plan() {
+        // An unbounded select chain of N entries at ~B bytes each crosses as
+        // chunks_required(N * B) RC-10 frames; the tighten cap on N stays a
+        // CANDIDATE (CTX-0005) for transport wiring (see docs/s2-wiring-batch1.md).
+        let entry_bytes = 256_usize;
+        for entries in [1_usize, 64, 1024] {
+            let total = entries.saturating_mul(entry_bytes);
+            let n = chunks_required(total);
+            assert!(n >= 1);
+            assert_eq!(n, (total as u64).div_ceil(RC10_CHUNK_CEILING as u64));
+        }
     }
 }
