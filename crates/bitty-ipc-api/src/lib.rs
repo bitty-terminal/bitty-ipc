@@ -13,6 +13,7 @@
 //! - JSON mapping rules and string bounds: `validate_params_json` (item 2)
 //! - Scope types: `Scope`, `ScopeSet`, `ConsentGrant`, `ConsentLedger`
 //! - Wire types: wire version, envelope validation bounds
+//! - Chunk reassembly: `ChunkReassembler`, `FeedOutcome`, assembly bounds
 //! - Frame types: `Frame`, frame size bounds
 //! - Channel types: `RequestId`, `IpcRequest`, `IpcResponse`, capacity bounds
 //!
@@ -38,6 +39,7 @@ pub mod deadline;
 pub mod error;
 pub mod frame;
 pub mod json;
+pub mod reassembly;
 pub mod refusal;
 pub mod scope;
 pub mod wire;
@@ -56,6 +58,10 @@ pub use frame::{Frame, Framer, MAX_BUFFERED_BYTES, MAX_FRAME_BYTES, decode_frame
 pub use json::{
     MAX_AGENT_ALIAS_BYTES, MAX_MANIFEST_FIELD_BYTES, validate_alias, validate_manifest_field,
     validate_params_json, validate_result_json,
+};
+pub use reassembly::{
+    ChunkReassembler, FeedOutcome, MAX_ASSEMBLY_BYTES, MAX_CHUNKS_PER_ASSEMBLY,
+    MAX_OPEN_ASSEMBLIES, REASSEMBLY_TTL_MS,
 };
 pub use refusal::{AgentRefusal, ContextReadCount};
 pub use scope::{
