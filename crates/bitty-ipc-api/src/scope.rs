@@ -14,6 +14,8 @@
 //! - `plugin`: `plugin.inspect` < `plugin.manage`
 //! - `process`: `process.spawn` (always separate)
 //! - `debug`: `debug.inspect` < `debug.trace` < `debug.control`
+//! - `ai`: `ai.inspect` < `ai.invoke` (batch 2, wiring items 1+7; S2 envelope
+//!   ops ride `params`/`result` under one `ai.` method namespace)
 //!
 //! Notes from RFC:
 //! - `terminal.inspect` never implies `terminal.input`; `terminal.input` never
@@ -35,7 +37,7 @@ use crate::error::IpcError;
 
 // ── Scope definition ────────────────────────────────────────────────────────
 
-/// Accepted v1 scope families (13 scopes). Exact names are versioned with the
+/// Accepted v1 scope families (15 scopes). Exact names are versioned with the
 /// wire as accepted per the IPC RFC; changing a name requires an RFC revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Scope {
@@ -65,6 +67,29 @@ pub enum Scope {
     DebugTrace,
     /// `debug.control` — breakpoint, control.
     DebugControl,
+    /// `ai.inspect` — read-only AI ops: model catalog listing, routing-only
+    /// model selection, agent-context reads, extension manifest declaration
+    /// echoes, activation queries, cache presence hints, MCP pin checks,
+    /// MCP snapshot (digest) queries.
+    ///
+    /// // POLICY (CTX-0006): new scope, not a reuse. No existing scope
+    /// expresses AI-op semantics: the six RFC families each govern a
+    /// distinct authority domain (terminal text, views, config, plugins,
+    /// process spawning, debug transport), and forcing AI ops into any of
+    /// them would silently extend that scope's grant to a new domain
+    /// (consent downgrade). The inspect/invoke split mirrors the existing
+    /// inspect/manage family pattern without bending the hierarchy.
+    AiInspect,
+    /// `ai.invoke` — effectful AI ops: provider completion (inference
+    /// execution against a model reference, spending budget) and tool
+    /// dispatch (executing a tool with filesystem/network authority).
+    ///
+    /// // POLICY (CTX-0006): new scope, not a reuse. `process.spawn` (always
+    /// separate, executable-allowlist spawning) does not express model
+    /// invocation or tool-bus dispatch; mapping either op there would
+    /// silently grant it to every `process.spawn` holder. Kept separate so
+    /// read-only AI inspection never implies execution.
+    AiInvoke,
 }
 
 impl Scope {
@@ -85,6 +110,8 @@ impl Scope {
             Self::DebugInspect => "debug.inspect",
             Self::DebugTrace => "debug.trace",
             Self::DebugControl => "debug.control",
+            Self::AiInspect => "ai.inspect",
+            Self::AiInvoke => "ai.invoke",
         }
     }
 
@@ -98,10 +125,11 @@ impl Scope {
             Self::PluginInspect | Self::PluginManage => "plugin",
             Self::ProcessSpawn => "process",
             Self::DebugInspect | Self::DebugTrace | Self::DebugControl => "debug",
+            Self::AiInspect | Self::AiInvoke => "ai",
         }
     }
 
-    /// All 13 scopes in a deterministic order.
+    /// All 15 scopes in a deterministic order.
     #[must_use]
     pub fn all() -> &'static [Scope] {
         &[
@@ -118,6 +146,8 @@ impl Scope {
             Self::DebugInspect,
             Self::DebugTrace,
             Self::DebugControl,
+            Self::AiInspect,
+            Self::AiInvoke,
         ]
     }
 }
@@ -145,6 +175,8 @@ impl FromStr for Scope {
             "debug.inspect" => Ok(Self::DebugInspect),
             "debug.trace" => Ok(Self::DebugTrace),
             "debug.control" => Ok(Self::DebugControl),
+            "ai.inspect" => Ok(Self::AiInspect),
+            "ai.invoke" => Ok(Self::AiInvoke),
             _ => Err(IpcError::InvalidRequest {
                 reason: format!("unknown scope '{s}'"),
             }),
@@ -156,7 +188,7 @@ impl FromStr for Scope {
 
 /// Bounded set of granted scopes for one authenticated client.
 ///
-/// The set is owned, bounded (at most 13 entries), and headlessly testable.
+/// The set is owned, bounded (at most 15 entries), and headlessly testable.
 /// It never grows beyond the defined families. Cloning is cheap (small BTreeSet).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScopeSet {
@@ -208,7 +240,7 @@ impl ScopeSet {
         self.inner.is_empty()
     }
 
-    /// Number of granted scopes (0..=13).
+    /// Number of granted scopes (0..=15).
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.len()
@@ -228,8 +260,13 @@ impl ScopeSet {
     /// CLI interactive user default (union per RFC):
     /// `terminal.inspect`, `terminal.input`, `view.inspect`, `view.manage`,
     /// `config.inspect`, `plugin.inspect` (6). `terminal.manage`,
-    /// `config.modify`, `plugin.manage`, `process.spawn`, all `debug` require
-    /// explicit elevation.
+    /// `config.modify`, `plugin.manage`, `process.spawn`, all `debug`, and
+    /// all `ai` require explicit elevation.
+    ///
+    /// // POLICY (CTX-0006): `ai.inspect`/`ai.invoke` are excluded from the
+    /// CLI default (deny-by-default survives for every AI op). CLI callers
+    /// reach AI methods only through an explicit ledgered elevation grant,
+    /// never ambiently.
     #[must_use]
     pub fn cli_default() -> Self {
         let mut s = Self::new();
@@ -246,6 +283,12 @@ impl ScopeSet {
     /// `terminal.inspect`, `view.inspect`, `config.inspect`, `plugin.inspect`
     /// plus `debug.inspect` only if explicitly presented. This method returns
     /// the base 4; callers add `debug.inspect` if client presented it.
+    ///
+    /// // POLICY (CTX-0006): `ai.inspect`/`ai.invoke` are excluded from the
+    /// MCP default as well (deny-by-default survives for every AI op, on
+    /// both profiles). A fresh `(UID, AgentId)` reads snapshots and lists
+    /// resources through the existing read scopes only; every `ai.*` method
+    /// needs a separate per-client consent grant (RFC consent items 1-2).
     #[must_use]
     pub fn mcp_default() -> Self {
         let mut s = Self::new();
@@ -406,16 +449,61 @@ pub fn required_scope_for_method(method: &str) -> Option<Scope> {
         "debug.snapshot" | "debug.inspect" | "debug.get" => Some(Scope::DebugInspect),
         "debug.start_trace" | "debug.trace" => Some(Scope::DebugTrace),
         "debug.break" | "debug.control" | "debug.pause" => Some(Scope::DebugControl),
+        // ai — one method per S2 envelope request type (batch 2, items 1+7).
+        // Read-only ops take `ai.inspect`; effectful ops take `ai.invoke`.
+        // Neither scope is in any default set, so every arm below denies
+        // until an explicit ledgered grant exists (deny-by-default).
+        //
+        // // POLICY (CTX-0006): per-method assignment rationale.
+        // `ai.inspect` (read-only, no effects, no budget spend, no authority
+        // exercised): provider catalog listing (`ListModelsRequest` carries
+        // no filters; the reserved scoped variant is denied S2-side per
+        // MP-4), routing-only model selection (detached snapshot chain, no
+        // inference), pure fallback classification and pure cost arithmetic
+        // over echoed inputs (total, no I/O either side could not do locally,
+        // but routed here so every crossing envelope has a scoped method and
+        // server-side attribution), scoped agent-context reads (untrusted
+        // observation: must never auto-combine with dispatch, RFC consent
+        // item 3), manifest/per-point declaration echoes (grant nothing),
+        // the activation check-named query (question only, always denies
+        // today under the S3 deny-all posture), cache presence-hint queries
+        // (a hit never authorizes reuse; keys only, no values cross), and
+        // the MCP pin/snapshot digest queries (data compare only).
+        // `ai.invoke` (effectful): provider completion (inference execution
+        // against a model reference: spends budget pre-I/O, consumes the
+        // caller deadline, produces untrusted model output) and tool
+        // dispatch (executes with filesystem/network authority via the host
+        // bus; args cross digest-only; per-tool consent stays a host-side
+        // execution gate on top of this method grant).
+        "ai.provider_list"
+        | "ai.model_select"
+        | "ai.model_fallback"
+        | "ai.model_cost"
+        | "ai.context_read"
+        | "ai.extension_manifest"
+        | "ai.extension_contribute"
+        | "ai.extension_activate"
+        | "ai.cache_hint"
+        | "ai.mcp_pin"
+        | "ai.mcp_snapshot" => Some(Scope::AiInspect),
+        "ai.provider_complete" | "ai.tool_dispatch" => Some(Scope::AiInvoke),
         _ => None,
     }
 }
 
-/// All methods in the generic IPC registry (38, wire-stable).
+/// All methods in the generic IPC registry (51, wire-stable).
 ///
 /// This is the single countable list backing [`required_scope_for_method`]:
 /// every entry maps to `Some`, and every `Some` mapping has its method here.
 /// Tests assert the two stay in sync so the scope×action matrix cannot
 /// silently drift from the registry (R-011 closure).
+///
+/// // POLICY (CTX-0006): exactly one canonical name per S2 envelope request
+/// type under the single `ai.` namespace — no aliases, no per-variant
+/// fan-out (e.g. one `ai.extension_contribute` for all eight
+/// `ContributionEnvelope` points; the point rides `params`). A future S-1
+/// snapshot correlator lands as an optional `params`-JSON field, not a new
+/// method, so this list does not change for it.
 #[must_use]
 pub fn all_known_methods() -> &'static [&'static str] {
     &[
@@ -463,6 +551,20 @@ pub fn all_known_methods() -> &'static [&'static str] {
         "debug.break",
         "debug.control",
         "debug.pause",
+        // ai (13): one per S2 envelope request type (batch 2, items 1+7)
+        "ai.provider_list",
+        "ai.provider_complete",
+        "ai.model_select",
+        "ai.model_fallback",
+        "ai.model_cost",
+        "ai.tool_dispatch",
+        "ai.context_read",
+        "ai.extension_manifest",
+        "ai.extension_contribute",
+        "ai.extension_activate",
+        "ai.cache_hint",
+        "ai.mcp_pin",
+        "ai.mcp_snapshot",
     ]
 }
 
@@ -529,6 +631,14 @@ impl ConsentGrant {
 /// Oldest entries are not auto-evicted — ledger is explicit: `grant` fails
 /// when at capacity (fail-closed), `revoke` frees space. This keeps the
 /// security posture deterministic and countable (FS-IP4 attribution).
+///
+/// Per-op AI consent gating (batch 2, item 7) flows through this ledger with
+/// no new mechanism: `ai.inspect`/`ai.invoke` are in no default set, so the
+/// first lawful use of any `ai.*` method is a `grant` for exactly one of
+/// those scopes, and revocation/expiry returns the client to deny. The
+/// per-method consent defaults (CLI vs MCP/Agent) are tabulated in
+/// `docs/s2-wiring-batch2.md`; the ledger records `who, scope, granted_at,
+/// expires_at, granted_by` per grant (RFC consent item 4).
 #[derive(Debug, Default)]
 pub struct ConsentLedger {
     grants: BTreeSet<(String, Scope)>,
@@ -845,5 +955,213 @@ mod tests {
         assert!(!ledger.is_granted("agent", Scope::PluginManage, 0));
         assert!(!ledger.is_granted("agent", Scope::ProcessSpawn, 0));
         assert!(!ledger.is_granted("agent", Scope::DebugControl, 0));
+    }
+
+    // ── Batch 2 (CTX-0006): ai.* registry, denial, consent, echo ──────────
+
+    const AI_INSPECT_METHODS: &[&str] = &[
+        "ai.provider_list",
+        "ai.model_select",
+        "ai.model_fallback",
+        "ai.model_cost",
+        "ai.context_read",
+        "ai.extension_manifest",
+        "ai.extension_contribute",
+        "ai.extension_activate",
+        "ai.cache_hint",
+        "ai.mcp_pin",
+        "ai.mcp_snapshot",
+    ];
+
+    const AI_INVOKE_METHODS: &[&str] = &["ai.provider_complete", "ai.tool_dispatch"];
+
+    #[test]
+    fn ai_registry_completeness() {
+        // Single countable list: 38 wire-stable methods plus 13 ai methods.
+        assert_eq!(all_known_methods().len(), 51);
+        // No duplicates.
+        let mut seen = std::collections::BTreeSet::new();
+        for m in all_known_methods() {
+            assert!(seen.insert(*m), "duplicate method '{m}'");
+        }
+        // Every listed method resolves (forward sync: list -> Some).
+        for m in all_known_methods() {
+            assert!(
+                required_scope_for_method(m).is_some(),
+                "listed method '{m}' has no required scope"
+            );
+        }
+        // Every ai method resolves to its assigned scope.
+        for m in AI_INSPECT_METHODS {
+            assert_eq!(
+                required_scope_for_method(m),
+                Some(Scope::AiInspect),
+                "method '{m}'"
+            );
+        }
+        for m in AI_INVOKE_METHODS {
+            assert_eq!(
+                required_scope_for_method(m),
+                Some(Scope::AiInvoke),
+                "method '{m}'"
+            );
+        }
+        // Every new name passes the wire grammar.
+        for m in all_known_methods() {
+            if m.starts_with("ai.") {
+                assert!(validate_method_name(m).is_ok(), "method '{m}'");
+            }
+        }
+    }
+
+    #[test]
+    fn ai_scope_denial_by_default() {
+        // // POLICY (CTX-0006): deny-by-default survives on every profile —
+        // no default set contains either ai scope, so every ai method denies
+        // with ScopeDenied (known method, missing grant), never NotFound.
+        let profiles = [
+            ScopeSet::new(),
+            ScopeSet::cli_default(),
+            ScopeSet::mcp_default(),
+            ScopeSet::mcp_default_with_debug_inspect(),
+        ];
+        assert_eq!(ScopeSet::cli_default().len(), 6);
+        assert_eq!(ScopeSet::mcp_default().len(), 4);
+        for granted in &profiles {
+            assert!(!granted.contains(Scope::AiInspect));
+            assert!(!granted.contains(Scope::AiInvoke));
+            for m in AI_INSPECT_METHODS.iter().chain(AI_INVOKE_METHODS.iter()) {
+                let err = authorize_method(m, granted).unwrap_err();
+                assert!(
+                    matches!(err, IpcError::ScopeDenied { .. }),
+                    "method '{m}' denied wrongly: {err:?}"
+                );
+            }
+        }
+        // Elevation is required on both profiles for both ai scopes.
+        assert!(ScopeSet::requires_elevation(Scope::AiInspect));
+        assert!(ScopeSet::requires_elevation(Scope::AiInvoke));
+        assert!(ScopeSet::requires_mcp_elevation(Scope::AiInspect));
+        assert!(ScopeSet::requires_mcp_elevation(Scope::AiInvoke));
+    }
+
+    #[test]
+    fn ai_inspect_does_not_imply_invoke() {
+        // // POLICY (CTX-0006): the `ai.inspect` < `ai.invoke` ordering is
+        // authority order only, like every existing family — no implication
+        // in either direction (exact-match authorize, no ambient escalation).
+        let inspect_only = ScopeSet::single(Scope::AiInspect);
+        for m in AI_INSPECT_METHODS {
+            assert!(authorize_method(m, &inspect_only).is_ok(), "method '{m}'");
+        }
+        for m in AI_INVOKE_METHODS {
+            assert!(authorize_method(m, &inspect_only).is_err());
+        }
+        let invoke_only = ScopeSet::single(Scope::AiInvoke);
+        for m in AI_INVOKE_METHODS {
+            assert!(authorize_method(m, &invoke_only).is_ok(), "method '{m}'");
+        }
+        for m in AI_INSPECT_METHODS {
+            assert!(authorize_method(m, &invoke_only).is_err());
+        }
+    }
+
+    #[test]
+    fn ai_unregistered_name_denies_notfound() {
+        // Unknown methods deny NotFound even with every scope granted: no
+        // ambient authority, no ai-namespace wildcard (FS-IP1).
+        let all = ScopeSet::all();
+        for m in ["ai.evil", "ai.admin", "ai.invoke_all", "ai"] {
+            let err = authorize_method(m, &all).unwrap_err();
+            assert!(
+                matches!(err, IpcError::NotFound { .. }),
+                "method '{m}' denied wrongly: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ai_method_grammar_rejection() {
+        for m in [
+            "ai.",
+            "ai..list",
+            ".ai.list",
+            "ai.list.",
+            "ai.List",
+            "ai.9lives",
+            "ai.has space",
+            "AI.list",
+            "ai.list!",
+            "ai.model-select",
+        ] {
+            assert!(
+                validate_method_name(m).is_err(),
+                "bad ai name '{m}' accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn forged_level_echo_cannot_escalate() {
+        use crate::json::validate_params_json;
+        // // POLICY (CTX-0006): AuthBase.level / CallerScopeEcho cross as
+        // params data only. Authorization reads solely the server-derived
+        // grant set — a forged tier echo in params changes nothing.
+        let forged = br#"{"level":"All","agent_instance_id":1,"session_id":2}"#;
+        assert!(validate_params_json(forged).is_ok()); // opaque data, ignored
+        assert!(authorize_method("ai.tool_dispatch", &ScopeSet::new()).is_err());
+        // Wrapped as authority, the same echo is refused at the JSON layer.
+        assert!(validate_params_json(br#"{"auth":{"level":"All"}}"#).is_err());
+        assert!(validate_params_json(br#"{"scope":"ai.invoke"}"#).is_err());
+        assert!(validate_params_json(br#"{"role":"admin"}"#).is_err());
+        // A grant for an unrelated scope does not escalate into ai.invoke.
+        let mut other = ScopeSet::new();
+        other.insert(Scope::ProcessSpawn);
+        other.insert(Scope::TerminalManage);
+        let err = authorize_method("ai.tool_dispatch", &other).unwrap_err();
+        assert!(matches!(err, IpcError::ScopeDenied { .. }));
+        let err2 = authorize_method("ai.provider_complete", &other).unwrap_err();
+        assert!(matches!(err2, IpcError::ScopeDenied { .. }));
+    }
+
+    #[test]
+    fn ai_consent_ledger_path() {
+        // // POLICY (CTX-0006): per-op consent gating for ai methods flows
+        // through the generic ledger — one scope per grant, no bundling,
+        // revocation/expiry returns the client to deny (RFC consent items
+        // 1-2, 4).
+        let mut ledger = ConsentLedger::new();
+        let client = "agent-7";
+        // Grant ai.inspect: inspect methods allowed, invoke still denied.
+        ledger
+            .grant(client.into(), Scope::AiInspect, 0, 10_000, "user".into())
+            .unwrap();
+        let mut granted = ScopeSet::new();
+        if ledger.is_granted(client, Scope::AiInspect, 100) {
+            granted.insert(Scope::AiInspect);
+        }
+        if ledger.is_granted(client, Scope::AiInvoke, 100) {
+            granted.insert(Scope::AiInvoke);
+        }
+        assert!(authorize_method("ai.model_select", &granted).is_ok());
+        assert!(authorize_method("ai.tool_dispatch", &granted).is_err());
+        // Separate grant for ai.invoke: no bundling, each scope independent.
+        ledger
+            .grant(client.into(), Scope::AiInvoke, 100, 10_000, "user".into())
+            .unwrap();
+        let mut granted2 = ScopeSet::new();
+        if ledger.is_granted(client, Scope::AiInspect, 200) {
+            granted2.insert(Scope::AiInspect);
+        }
+        if ledger.is_granted(client, Scope::AiInvoke, 200) {
+            granted2.insert(Scope::AiInvoke);
+        }
+        assert!(authorize_method("ai.tool_dispatch", &granted2).is_ok());
+        // Revocation returns to deny immediately.
+        assert!(ledger.revoke(client, Scope::AiInvoke));
+        assert!(!ledger.is_granted(client, Scope::AiInvoke, 200));
+        // Expiry returns to deny without revocation.
+        assert!(ledger.is_granted(client, Scope::AiInspect, 9_999));
+        assert!(!ledger.is_granted(client, Scope::AiInspect, 10_000));
     }
 }
