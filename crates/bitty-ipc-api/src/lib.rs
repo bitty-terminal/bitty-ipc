@@ -11,6 +11,7 @@
 //! - Correlation: `WireBinding`, `AttributionHandles`, `args_digest` (item 5)
 //! - Timeout mapping: `validate_domain_timeout`, `domain_deadline_ms` (item 6)
 //! - JSON mapping rules and string bounds: `validate_params_json` (item 2)
+//! - Per-method `ai.*` params/result schemas: `validate_ai_params` (CTX-0011)
 //! - Scope types: `Scope`, `ScopeSet`, `ConsentGrant`, `ConsentLedger`
 //! - Wire types: wire version, envelope validation bounds
 //! - Chunk reassembly: `ChunkReassembler`, `FeedOutcome`, assembly bounds
@@ -41,6 +42,7 @@ pub mod frame;
 pub mod json;
 pub mod reassembly;
 pub mod refusal;
+pub mod schema;
 pub mod scope;
 pub mod wire;
 
@@ -64,6 +66,17 @@ pub use reassembly::{
     MAX_OPEN_ASSEMBLIES, REASSEMBLY_TTL_MS,
 };
 pub use refusal::{AgentRefusal, ContextReadCount};
+pub use schema::{
+    MAX_SCHEMA_ABSENCES, MAX_SCHEMA_ACTIVATION_POINT_BYTES, MAX_SCHEMA_ALLOWED,
+    MAX_SCHEMA_CANONICAL_PREFIX_BYTES, MAX_SCHEMA_CONTEXT_REF_BYTES, MAX_SCHEMA_CONTEXT_REFS,
+    MAX_SCHEMA_ENABLE_LIST, MAX_SCHEMA_ERROR_NAME_BYTES, MAX_SCHEMA_ID_LIST,
+    MAX_SCHEMA_MESSAGE_BYTES, MAX_SCHEMA_MESSAGES, MAX_SCHEMA_MODEL_NAME_BYTES, MAX_SCHEMA_MODELS,
+    MAX_SCHEMA_PROVIDER_ID_BYTES, MAX_SCHEMA_REASON_BYTES, MAX_SCHEMA_RECORD_BODY_BYTES,
+    MAX_SCHEMA_RECORDS, MAX_SCHEMA_STABLE_ID_BYTES, MAX_SCHEMA_SUMMARY_BYTES,
+    MAX_SCHEMA_TEXT_BYTES, MAX_SCHEMA_TIMEOUT_MS, MAX_SCHEMA_TOOL_ARGUMENTS_BYTES,
+    MAX_SCHEMA_TOOL_CALLS, MAX_SCHEMA_TOOL_NAME_BYTES, MAX_SCHEMA_TOOLS, validate_ai_params,
+    validate_ai_result,
+};
 pub use scope::{
     ConsentGrant, ConsentLedger, Scope, ScopeSet, all_known_methods, authorize_method,
     required_scope_for_method, validate_method_name,
