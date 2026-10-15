@@ -678,6 +678,23 @@ impl ConsentLedger {
         }
     }
 
+    /// Read-only inspection of the stored grant for `(client_id, scope)`.
+    ///
+    /// Returns a clone of the ledgered record when present, regardless of
+    /// expiry, so a future `ai.*` handler can check per-op consent state
+    /// pre-dispatch (S-G): liveness is evaluated by the caller with
+    /// [`ConsentGrant::is_expired`] or [`ConsentLedger::is_granted`].
+    /// Returns `None` when no grant was ever recorded or after `revoke`.
+    ///
+    /// This never mutates the ledger: it does not grant, extend, refresh,
+    /// drain, or evict anything. Expired records stay stored until an
+    /// explicit [`ConsentLedger::drain_expired`] call.
+    #[must_use]
+    pub fn inspect(&self, client_id: &str, scope: Scope) -> Option<ConsentGrant> {
+        let key = (client_id.to_string(), scope);
+        self.records.get(&key).cloned()
+    }
+
     /// Grant `scope` to `client_id` for `ttl_ms` (from `now_ms`). Ledgered.
     ///
     /// If the same `(client, scope)` already exists, it is refreshed (expiry
@@ -1163,5 +1180,83 @@ mod tests {
         // Expiry returns to deny without revocation.
         assert!(ledger.is_granted(client, Scope::AiInspect, 9_999));
         assert!(!ledger.is_granted(client, Scope::AiInspect, 10_000));
+    }
+
+    #[test]
+    fn consent_inspect_is_read_only_predispatch() {
+        // S-G: read-only inspection for pre-dispatch consent checks. Covers
+        // live, expired (visible-as-expired, not granted), revoked, and
+        // never-granted states, plus non-mutation (no grant, extend, or
+        // refresh through inspection).
+        let mut ledger = ConsentLedger::new();
+        let live_now = 500;
+        ledger
+            .grant(
+                "live-client".into(),
+                Scope::AiInvoke,
+                0,
+                10_000,
+                "user".into(),
+            )
+            .unwrap();
+        ledger
+            .grant(
+                "stale-client".into(),
+                Scope::AiInvoke,
+                0,
+                100,
+                "user".into(),
+            )
+            .unwrap();
+        ledger
+            .grant(
+                "gone-client".into(),
+                Scope::AiInvoke,
+                0,
+                10_000,
+                "user".into(),
+            )
+            .unwrap();
+        assert!(ledger.revoke("gone-client", Scope::AiInvoke));
+
+        // Live grant visible with its expiry.
+        let live = ledger.inspect("live-client", Scope::AiInvoke).unwrap();
+        assert_eq!(live.scope, Scope::AiInvoke);
+        assert_eq!(live.client_id, "live-client");
+        assert_eq!(live.granted_at_ms, 0);
+        assert_eq!(live.expires_at_ms, 10_000);
+        assert!(!live.is_expired(live_now));
+        assert!(ledger.is_granted("live-client", Scope::AiInvoke, live_now));
+
+        // Expired grant visible-as-expired (record present, not granted).
+        let stale = ledger.inspect("stale-client", Scope::AiInvoke).unwrap();
+        assert!(stale.is_expired(1_000));
+        assert!(!ledger.is_granted("stale-client", Scope::AiInvoke, 1_000));
+
+        // Revoked and never-granted both visible as absent.
+        assert!(ledger.inspect("gone-client", Scope::AiInvoke).is_none());
+        assert!(ledger.inspect("fresh-client", Scope::AiInvoke).is_none());
+        assert!(!ledger.is_granted("gone-client", Scope::AiInvoke, live_now));
+        assert!(!ledger.is_granted("fresh-client", Scope::AiInvoke, live_now));
+
+        // Inspection never mutates: observable state identical before/after.
+        let len_before = ledger.len();
+        let active_before = ledger.active_grants(live_now);
+        let again_before = ledger.inspect("live-client", Scope::AiInvoke).unwrap();
+        let _ = ledger.inspect("live-client", Scope::AiInvoke);
+        let _ = ledger.inspect("stale-client", Scope::AiInvoke);
+        let _ = ledger.inspect("gone-client", Scope::AiInvoke);
+        let _ = ledger.inspect("fresh-client", Scope::AiInvoke);
+        assert_eq!(ledger.len(), len_before);
+        assert_eq!(ledger.active_grants(live_now), active_before);
+        assert_eq!(
+            ledger.inspect("live-client", Scope::AiInvoke).unwrap(),
+            again_before
+        );
+        // No grant, extend, or refresh: expiry and liveness unchanged.
+        let after = ledger.inspect("live-client", Scope::AiInvoke).unwrap();
+        assert_eq!(after.expires_at_ms, 10_000);
+        assert!(ledger.is_granted("live-client", Scope::AiInvoke, live_now));
+        assert!(!ledger.is_granted("live-client", Scope::AiInvoke, 10_000));
     }
 }
