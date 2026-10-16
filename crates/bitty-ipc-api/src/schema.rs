@@ -76,6 +76,13 @@
 //! - `ai.mcp_snapshot`: `{}` (empty body also accepted) -> `{entries R
 //!   [{name <=64, digest R u64}], list_version R u64, list_stale R bool}`.
 //!
+//! S-1 snapshot correlator (CTX-0014): every `params` shape above
+//! additionally accepts ONE optional `snapshot_version: u64` field (absent
+//! = S-2 fallback; see `check_snapshot_version_param` for the shape rule).
+//! The field is top-level `params`-only: never in `result` shapes and never
+//! inside nested objects (a nested `snapshot_version` refuses as unknown).
+//! Unknown OTHER fields still refuse everywhere (allow-list, not wildcard).
+//!
 //! S2 envelope sources below cite `bitty-ai @ b41b55c`,
 //! `crates/bitty-ai-host/src/`, read-only reference; no `bitty-ai` crate is
 //! depended on.
@@ -907,12 +914,28 @@ fn check_manifest(f: &Fields<'_>) -> Result<(), IpcError> {
 
 // ── per-method params ───────────────────────────────────────────────────────
 
+// POLICY (CTX-0014): optional S-1 snapshot correlator (`snapshot_version`,
+// `u64` full range, absent = S-2 fallback). Allow-listed on every `ai.*`
+// top-level `params` object via the existing `opt()` absent-means-default
+// machinery: a present value must be a plain `u64` integer (ASCII digits;
+// negatives, fractions, exponents, over-`u64` magnitudes, and every
+// non-number type refuse `InvalidRequest` through `opt_u64`). No
+// enforcement here (staleness is S-F-owned; the `bitty-ai` endpoint reads
+// the same field tolerantly). Unknown OTHER fields still refuse through
+// each validator's `check_known` (allow-list, not wildcard); duplicates
+// refuse through the existing parser duplicate-key rule, unchanged.
+fn check_snapshot_version_param(f: &Fields<'_>) -> Result<Option<u64>, IpcError> {
+    f.opt_u64("snapshot_version")
+}
+
 fn validate_provider_list_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // No filter fields: the only accepted shape is the unfiltered request
     // (S2 `ListModelsRequest::unfiltered`; the reserved scoped variant is
     // denied S2-side per MP-4, so `caller_scope`/`scope` must never cross
-    // and refuse here as unknown).
-    f.check_known(&[])?;
+    // and refuse here as unknown). The optional S-1 correlator is the one
+    // exception (see `check_snapshot_version_param`).
+    f.check_known(&["snapshot_version"])?;
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -926,6 +949,7 @@ fn validate_provider_complete_params(f: &Fields<'_>) -> Result<(), IpcError> {
         "timeout_ms",
         "now_ms",
         "sampling",
+        "snapshot_version",
     ])?;
     let model = f.req_obj("model")?;
     model.check_known(&["provider_id", "model"])?;
@@ -1040,6 +1064,9 @@ fn validate_provider_complete_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // POLICY (CTX-0011): optional, default `"undeclared"` (matches the S2
     // `#[default]`; absent flows through untouched).
     f.opt_vocab_or("sampling", SAMPLING, "undeclared")?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -1049,6 +1076,7 @@ fn validate_model_select_params(f: &Fields<'_>) -> Result<(), IpcError> {
         "alias",
         "min_context_window_tokens",
         "max_cost_weight",
+        "snapshot_version",
     ])?;
     let required = f.req_arr("required")?;
     // S2 `SelectEnvelopeRequest` narrows only: selection never matches
@@ -1074,11 +1102,14 @@ fn validate_model_select_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // absent; narrowing never widens, so absent constrains nothing).
     f.opt_u32("min_context_window_tokens")?;
     f.opt_u32("max_cost_weight")?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_model_fallback_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    f.check_known(&["error", "detail"])?;
+    f.check_known(&["error", "detail", "snapshot_version"])?;
     // POLICY (CTX-0011): the echoed error crosses as its variant name only.
     // Classification keys on the variant (`fallback_directive` is total over
     // it); the 13 payload shapes (limits, providers, reasons) stay S2-side
@@ -1087,6 +1118,9 @@ fn validate_model_fallback_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // POLICY (CTX-0011): optional bounded detail carrier (provider/reason
     // text at the reason scale), default `""`; grammar S2-owned.
     f.opt_bounded("detail", "detail", MAX_SCHEMA_REASON_BYTES)?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -1096,6 +1130,7 @@ fn validate_model_cost_params(f: &Fields<'_>) -> Result<(), IpcError> {
         "output_tokens",
         "input_weight",
         "output_weight",
+        "snapshot_version",
     ])?;
     // All four `estimate_cost` inputs required: `0` weights are meaningful
     // (uncalibrated baseline `1`), so no field may be omitted in favor of a
@@ -1104,11 +1139,21 @@ fn validate_model_cost_params(f: &Fields<'_>) -> Result<(), IpcError> {
     f.req_u64("output_tokens")?;
     f.req_u32("input_weight")?;
     f.req_u32("output_weight")?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_tool_dispatch_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    f.check_known(&["tool", "args_digest", "caller", "allowed", "now_ms"])?;
+    f.check_known(&[
+        "tool",
+        "args_digest",
+        "caller",
+        "allowed",
+        "now_ms",
+        "snapshot_version",
+    ])?;
     // POLICY (CTX-0011): bytes only plus non-empty, no `^[a-z]...` grammar
     // (batch-1 item 2 rule 6); malformed names cross and S2 refuses typed.
     f.req_id("tool", "tool", MAX_SCHEMA_TOOL_NAME_BYTES)?;
@@ -1152,11 +1197,14 @@ fn validate_tool_dispatch_params(f: &Fields<'_>) -> Result<(), IpcError> {
         }
     }
     f.req_u64("now_ms")?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_context_read_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    f.check_known(&["scopes", "request", "detail"])?;
+    f.check_known(&["scopes", "request", "detail", "snapshot_version"])?;
     let scopes = f.req_capped_arr("scopes", MAX_SCHEMA_RECORDS)?;
     // S2 `ContextReadRequest::validate`: non-empty, at most
     // `MAX_CONTEXT_RECORDS`.
@@ -1189,13 +1237,19 @@ fn validate_context_read_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // POLICY (CTX-0011): optional, default `"summary"` (least data: the
     // read-only default exposes references only until asked for more).
     f.opt_vocab_or("detail", DETAIL_LEVELS, "summary")?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_extension_manifest_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    f.check_known(&["manifest"])?;
+    f.check_known(&["manifest", "snapshot_version"])?;
     let manifest = f.req_obj("manifest")?;
     check_manifest(&manifest)?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -1204,14 +1258,17 @@ fn validate_extension_contribute_params(f: &Fields<'_>) -> Result<(), IpcError> 
     // point rides params as closed vocabulary, the descriptor as one
     // opaque bounded string (whichever `*Descriptor` field the S1 point
     // shape carries).
-    f.check_known(&["point", "value"])?;
+    f.check_known(&["point", "value", "snapshot_version"])?;
     f.req_vocab("point", EXTENSION_POINTS)?;
     f.req_bounded("value", "value", MAX_MANIFEST_FIELD_BYTES)?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_extension_activate_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    f.check_known(&["point", "enabled"])?;
+    f.check_known(&["point", "enabled", "snapshot_version"])?;
     // POLICY (CTX-0011): OPEN string (see const rationale): unknown names
     // must cross so S2 refuses typed `UnknownPoint`.
     f.req_id("point", "point", MAX_SCHEMA_ACTIVATION_POINT_BYTES)?;
@@ -1243,6 +1300,9 @@ fn validate_extension_activate_params(f: &Fields<'_>) -> Result<(), IpcError> {
             }
         }
     }
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -1253,7 +1313,7 @@ fn validate_cache_hint_params(f: &Fields<'_>) -> Result<(), IpcError> {
     // byte is interpreted, and an authority-shaped echo must never share a
     // name with an authority assertion. The nested `key.scope` is data at
     // depth 2 and keeps the S2 field name.
-    f.check_known(&["key", "ask_scope", "fingerprint"])?;
+    f.check_known(&["key", "ask_scope", "fingerprint", "snapshot_version"])?;
     let key = f.req_obj("key")?;
     check_cache_key(&key)?;
     let ask_scope = f.req_vocab("ask_scope", CACHE_SCOPES)?;
@@ -1270,20 +1330,31 @@ fn validate_cache_hint_params(f: &Fields<'_>) -> Result<(), IpcError> {
     if ask_scope != key_scope {
         return f.fail("field 'ask_scope' must equal key scope");
     }
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_mcp_pin_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    // Pin query carries no fields: the pin is server-echoed state compared
-    // data-only (`PinEnvelope::matches`); nothing is filtered by.
-    f.check_known(&[])?;
+    // Pin query carries no fields apart from the optional S-1 correlator:
+    // the pin is server-echoed state compared data-only
+    // (`PinEnvelope::matches`); nothing is filtered by.
+    f.check_known(&["snapshot_version"])?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
 fn validate_mcp_snapshot_params(f: &Fields<'_>) -> Result<(), IpcError> {
-    // Snapshot query carries no fields: digest pairs plus version/stale
-    // flags echo back as data with no enforcement here.
-    f.check_known(&[])?;
+    // Snapshot query carries no fields apart from the optional S-1
+    // correlator: digest pairs plus version/stale flags echo back as data
+    // with no enforcement here.
+    f.check_known(&["snapshot_version"])?;
+    // POLICY (CTX-0014): optional S-1 snapshot correlator (absent = S-2
+    // fallback; shape-checked only, never enforced).
+    check_snapshot_version_param(f)?;
     Ok(())
 }
 
@@ -2522,6 +2593,163 @@ mod tests {
         assert!(is_invalid_request(&result(
             "ai.mcp_snapshot",
             &SNAPSHOT_RESULT.replace("\"digest\":123", "\"digest\":-1")
+        )));
+    }
+
+    // ── snapshot_version correlator (CTX-0014) ──
+
+    // One valid params body per method: shaped arms carry their fields,
+    // fieldless arms carry the empty object.
+    const CORRELATOR_BODIES: &[(&str, &str)] = &[
+        ("ai.provider_list", "{}"),
+        ("ai.provider_complete", COMPLETE_PARAMS),
+        ("ai.model_select", r#"{"required":["text"]}"#),
+        ("ai.model_fallback", r#"{"error":"transport"}"#),
+        (
+            "ai.model_cost",
+            r#"{"input_tokens":100,"output_tokens":20,"input_weight":0,"output_weight":2}"#,
+        ),
+        ("ai.tool_dispatch", DISPATCH_PARAMS),
+        ("ai.context_read", READ_PARAMS),
+        ("ai.extension_manifest", MANIFEST_PARAMS),
+        (
+            "ai.extension_contribute",
+            r#"{"point":"tool","value":"read-only fetch"}"#,
+        ),
+        ("ai.extension_activate", r#"{"point":"tool"}"#),
+        ("ai.cache_hint", HINT_PARAMS),
+        ("ai.mcp_pin", "{}"),
+        ("ai.mcp_snapshot", "{}"),
+    ];
+
+    fn with_correlator(body: &str, raw: &str) -> String {
+        if body == "{}" {
+            format!(r#"{{"snapshot_version":{raw}}}"#)
+        } else {
+            let inner = body.strip_suffix('}').expect("test body is an object");
+            format!(r#"{inner},"snapshot_version":{raw}}}"#)
+        }
+    }
+
+    #[test]
+    fn correlator_accepted_on_all_methods() {
+        assert_eq!(CORRELATOR_BODIES.len(), 13);
+        for (method, body) in CORRELATOR_BODIES {
+            // Absent (S-2 fallback) still accepts.
+            assert!(params(method, body).is_ok(), "{method} absent");
+            // Present sightings accept on shaped and fieldless arms alike.
+            assert!(
+                params(method, &with_correlator(body, "7")).is_ok(),
+                "{method} sighted"
+            );
+        }
+    }
+
+    #[test]
+    fn correlator_full_u64_range_accepted() {
+        // Zero and `u64::MAX` stay representational (no truncation).
+        let base = r#"{"input_tokens":1,"output_tokens":1,"input_weight":1,"output_weight":1}"#;
+        assert!(params("ai.model_cost", &with_correlator(base, "0"),).is_ok());
+        assert!(
+            params(
+                "ai.model_cost",
+                &with_correlator(base, "18446744073709551615"),
+            )
+            .is_ok()
+        );
+        assert!(params("ai.mcp_snapshot", &with_correlator("{}", "0")).is_ok());
+        assert!(
+            params(
+                "ai.mcp_snapshot",
+                &with_correlator("{}", "18446744073709551615"),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn correlator_malformed_refuses_invalid_request() {
+        // POLICY (CTX-0014): field-name-and-shape parity with the endpoint
+        // E2 contract — wrong types and over-`u64` magnitudes refuse
+        // `InvalidRequest`, never a silent drop or a wrap.
+        let raws = [
+            r#""3""#,               // string
+            "-1",                   // negative
+            "3.5",                  // fraction
+            "1e3",                  // exponent
+            "18446744073709551616", // over u64
+            "true",                 // boolean
+            "null",                 // null
+            "[3]",                  // array
+            r#"{"v":3}"#,           // object
+        ];
+        let base = r#"{"input_tokens":1,"output_tokens":1,"input_weight":1,"output_weight":1}"#;
+        for raw in raws {
+            assert!(
+                is_invalid_request(&params("ai.model_cost", &with_correlator(base, raw))),
+                "shaped malformed {raw}"
+            );
+            assert!(
+                is_invalid_request(&params("ai.mcp_pin", &with_correlator("{}", raw))),
+                "fieldless malformed {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn correlator_duplicate_refuses_invalid_request() {
+        // No new duplicate rule: the existing parser duplicate-key refusal
+        // covers the correlator on shaped and fieldless arms alike
+        // (matches the endpoint E2 duplicate-refusal contract).
+        let base = r#"{"input_tokens":1,"output_tokens":1,"input_weight":1,"output_weight":1}"#;
+        let inner = base.strip_suffix('}').expect("test body is an object");
+        assert!(is_invalid_request(&params(
+            "ai.model_cost",
+            &format!(r#"{inner},"snapshot_version":3,"snapshot_version":4}}"#)
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.mcp_snapshot",
+            r#"{"snapshot_version":3,"snapshot_version":4}"#
+        )));
+    }
+
+    #[test]
+    fn correlator_nested_refuses_unknown() {
+        // The correlator is top-level `params`-only: a nested
+        // `snapshot_version` refuses as unknown (allow-list, not wildcard).
+        assert!(is_invalid_request(&params(
+            "ai.context_read",
+            r#"{"scopes":["a"],"request":{"current_generation":1,"snapshot_version":3}}"#
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.tool_dispatch",
+            r#"{"tool":"fetch","args_digest":1,"caller":{"agent_instance_id":1,"session_id":1,"level":"inspect","snapshot_version":3},"now_ms":0}"#
+        )));
+    }
+
+    #[test]
+    fn unknown_other_field_still_refuses_with_correlator() {
+        // Regression pin: allow-listing the correlator opens no wildcard —
+        // unknown OTHER fields still refuse with or without the correlator.
+        assert!(is_invalid_request(&params(
+            "ai.model_cost",
+            r#"{"input_tokens":1,"output_tokens":1,"input_weight":1,"output_weight":1,"nope":1}"#
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.model_cost",
+            r#"{"input_tokens":1,"output_tokens":1,"input_weight":1,"output_weight":1,"snapshot_version":3,"nope":1}"#
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.mcp_snapshot",
+            r#"{"nope":1}"#
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.mcp_snapshot",
+            r#"{"snapshot_version":3,"nope":1}"#
+        )));
+        assert!(is_invalid_request(&params(
+            "ai.provider_list",
+            r#"{"snapshot_version":3,"scope":"x"}"#
         )));
     }
 }

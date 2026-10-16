@@ -48,7 +48,28 @@ protocol, "Envelope"). Canonical rules, in validation order:
 
 Executable form: `ipc-api/src/json.rs` (`validate_params_json`,
 `validate_result_json`); UTF-8 plus depth-`<= 32` confirmation tests live
-there.
+there. Per-method `params`/`result` field schemas ride one layer above in
+`ipc-api/src/schema.rs` (`validate_ai_params`, `validate_ai_result`;
+CTX-0011): closed `check_known` vocabularies — unknown fields refuse with
+`InvalidRequest`, never pass through.
+
+### S-1 snapshot correlator allowance (CTX-0014)
+
+The S-C per-method `params` schemas allow-list one optional `u64` field
+`snapshot_version` on all 13 `ai.*` methods (absent = S-2 fallback; the
+existing `opt()` absent-means-default machinery, no required/optional
+flip for any other field). Shape parity with the `bitty-ai` endpoint E2
+contract: full `u64` range accepted, non-`u64` types refuse
+`InvalidRequest`, duplicates refuse through the existing schema
+duplicate-key rule, unknown OTHER fields still refuse. No enforcement
+change on either side (the endpoint stays tolerant until S-F; AI-0303
+tracks the enforcement flip).
+
+Follow-up (separate `bitty-ai` task): the endpoint tripwire test
+(`gate5_refuses_correlator_pending_schema_allowance`) fails loudly now
+that the allowance has landed — update it to the allowed path
+(dispatch-path disposition coverage) instead of deleting it — plus the
+`bitty-ipc-api` pin bump.
 
 ### IPC-side string byte bounds (currently-unbounded S2 strings)
 
