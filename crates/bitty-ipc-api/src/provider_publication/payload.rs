@@ -354,15 +354,20 @@ impl ProviderRoutingProjection {
 
     /// Parse and validate exactly canonical provider-routing bytes.
     ///
-    /// The payload is depth-gated at [`CONTROL_JSON_DEPTH_MAX`] before
-    /// schema parsing, must carry the exact `provider-routing` domain, must
-    /// use the exact field order with no unknown or duplicate field, and must
-    /// re-encode byte-for-byte. Unsorted or non-canonical input is refused.
+    /// The whole payload is validated as UTF-8 exactly once, then depth-gated
+    /// at [`CONTROL_JSON_DEPTH_MAX`] before schema parsing. It must carry the
+    /// exact `provider-routing` domain, must use the exact field order with no
+    /// unknown or duplicate field, and must re-encode byte-for-byte. Unsorted
+    /// or non-canonical input is refused. Individual strings are bounded while
+    /// they are decoded, so an overlong literal is refused at the bound rather
+    /// than after a full scan.
     ///
     /// # Errors
     ///
     /// Returns a [`PayloadError`] describing the first bound or schema
-    /// violation.
+    /// violation. Non-UTF-8 bytes are refused as
+    /// [`PayloadError::InvalidText`] with field `payload` and reason
+    /// [`TextViolation::InvalidUtf8`], before depth or schema parsing.
     pub fn parse_canonical(bytes: &[u8]) -> Result<Self, PayloadError> {
         if bytes.len() > CONTROL_PAYLOAD_MAX_BYTES {
             return Err(PayloadError::TooLarge {
@@ -370,6 +375,10 @@ impl ProviderRoutingProjection {
                 limit: CONTROL_PAYLOAD_MAX_BYTES,
             });
         }
+        let text = std::str::from_utf8(bytes).map_err(|_| PayloadError::InvalidText {
+            field: "payload",
+            reason: TextViolation::InvalidUtf8,
+        })?;
         match validate_json_depth(bytes, CONTROL_JSON_DEPTH_MAX) {
             Ok(()) => {}
             Err(IpcError::PayloadTooLarge { .. }) => {
@@ -379,7 +388,7 @@ impl ProviderRoutingProjection {
             }
             Err(_) => return Err(PayloadError::InvalidJson),
         }
-        let providers = parse_projection(bytes)?;
+        let providers = parse_projection(text)?;
         let projection = Self::new(providers)?;
         if projection.canonical_bytes() != bytes {
             return Err(PayloadError::NonCanonical);
@@ -432,21 +441,25 @@ pub(crate) fn append_json_string(out: &mut Vec<u8>, value: &str) {
 }
 
 struct PayloadReader<'a> {
-    bytes: &'a [u8],
+    text: &'a str,
     pos: usize,
 }
 
 impl<'a> PayloadReader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+    fn new(text: &'a str) -> Self {
+        Self { text, pos: 0 }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        self.text.as_bytes()
     }
 
     fn remaining(&self) -> usize {
-        self.bytes.len() - self.pos
+        self.text.len() - self.pos
     }
 
     fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
+        self.bytes().get(self.pos).copied()
     }
 
     fn expect(&mut self, byte: u8) -> Result<(), PayloadError> {
@@ -467,7 +480,7 @@ impl<'a> PayloadReader<'a> {
         }
         let start = self.pos;
         let end = start + expected.len();
-        if &self.bytes[start..end] != expected {
+        if self.bytes().get(start..end) != Some(expected) {
             return Err(PayloadError::InvalidJson);
         }
         self.pos = end;
@@ -475,7 +488,7 @@ impl<'a> PayloadReader<'a> {
         self.expect(b':')
     }
 
-    fn string(&mut self) -> Result<String, PayloadError> {
+    fn string(&mut self, field: &'static str) -> Result<String, PayloadError> {
         let start = self.pos;
         self.expect(b'"')?;
         let mut out = String::new();
@@ -488,20 +501,24 @@ impl<'a> PayloadReader<'a> {
                 }
                 b'\\' => {
                     self.pos += 1;
-                    self.escape(&mut out)?;
+                    self.escape(&mut out, field)?;
                 }
                 0x00..=0x1f => return Err(PayloadError::InvalidJson),
                 _ => {
-                    let remaining = &self.bytes[self.pos..];
-                    let text =
-                        std::str::from_utf8(remaining).map_err(|_| PayloadError::InvalidJson)?;
-                    let character = text.chars().next().ok_or(PayloadError::InvalidJson)?;
-                    out.push(character);
+                    // The whole payload is validated as UTF-8 once before
+                    // parsing, and `pos` always advances by ASCII length or a
+                    // decoded scalar's length, so this slice is boundary-safe.
+                    let rest = self.text.get(self.pos..).ok_or(PayloadError::InvalidJson)?;
+                    let character = rest.chars().next().ok_or(PayloadError::InvalidJson)?;
+                    push_bounded_text(&mut out, field, character)?;
                     self.pos += character.len_utf8();
                 }
             }
         }
-        let raw = &self.bytes[start..self.pos];
+        let raw = self
+            .bytes()
+            .get(start..self.pos)
+            .ok_or(PayloadError::InvalidJson)?;
         let mut canonical = Vec::new();
         append_json_string(&mut canonical, &out);
         if canonical != raw {
@@ -510,18 +527,18 @@ impl<'a> PayloadReader<'a> {
         Ok(out)
     }
 
-    fn escape(&mut self, out: &mut String) -> Result<(), PayloadError> {
+    fn escape(&mut self, out: &mut String, field: &'static str) -> Result<(), PayloadError> {
         let escaped = self.peek().ok_or(PayloadError::InvalidJson)?;
         self.pos += 1;
-        match escaped {
-            b'"' => out.push('"'),
-            b'\\' => out.push('\\'),
-            b'/' => out.push('/'),
-            b'b' => out.push('\u{0008}'),
-            b'f' => out.push('\u{000c}'),
-            b'n' => out.push('\n'),
-            b'r' => out.push('\r'),
-            b't' => out.push('\t'),
+        let character = match escaped {
+            b'"' => '"',
+            b'\\' => '\\',
+            b'/' => '/',
+            b'b' => '\u{0008}',
+            b'f' => '\u{000c}',
+            b'n' => '\n',
+            b'r' => '\r',
+            b't' => '\t',
             b'u' => {
                 let mut code = 0u32;
                 for _ in 0..4 {
@@ -535,12 +552,11 @@ impl<'a> PayloadReader<'a> {
                     };
                     code = code * 16 + value;
                 }
-                let character = char::from_u32(code).ok_or(PayloadError::InvalidJson)?;
-                out.push(character);
+                char::from_u32(code).ok_or(PayloadError::InvalidJson)?
             }
             _ => return Err(PayloadError::InvalidJson),
-        }
-        Ok(())
+        };
+        push_bounded_text(out, field, character)
     }
 
     fn u32_field(&mut self, field: &'static str) -> Result<u32, PayloadError> {
@@ -556,10 +572,16 @@ impl<'a> PayloadReader<'a> {
             }
         } else {
             while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                if self.pos - start >= 10 {
+                    return Err(PayloadError::NumberOutOfRange { field });
+                }
                 self.pos += 1;
             }
         }
-        let raw = &self.bytes[start..self.pos];
+        let raw = self
+            .bytes()
+            .get(start..self.pos)
+            .ok_or(PayloadError::InvalidJson)?;
         let mut value: u32 = 0;
         for &byte in raw {
             value = value
@@ -571,11 +593,39 @@ impl<'a> PayloadReader<'a> {
     }
 }
 
-fn parse_projection(bytes: &[u8]) -> Result<Vec<ProviderEntry>, PayloadError> {
-    let mut reader = PayloadReader::new(bytes);
+fn push_bounded_text(
+    out: &mut String,
+    field: &'static str,
+    character: char,
+) -> Result<(), PayloadError> {
+    let actual = out
+        .len()
+        .checked_add(character.len_utf8())
+        .ok_or(PayloadError::InvalidText {
+            field,
+            reason: TextViolation::TooLong {
+                limit: CONTROL_STRING_MAX_BYTES,
+                actual: usize::MAX,
+            },
+        })?;
+    if actual > CONTROL_STRING_MAX_BYTES {
+        return Err(PayloadError::InvalidText {
+            field,
+            reason: TextViolation::TooLong {
+                limit: CONTROL_STRING_MAX_BYTES,
+                actual,
+            },
+        });
+    }
+    out.push(character);
+    Ok(())
+}
+
+fn parse_projection(text: &str) -> Result<Vec<ProviderEntry>, PayloadError> {
+    let mut reader = PayloadReader::new(text);
     reader.expect(b'{')?;
     reader.expect_key("domain")?;
-    if reader.string()? != PROVIDER_ROUTING_DOMAIN {
+    if reader.string("domain")? != PROVIDER_ROUTING_DOMAIN {
         return Err(PayloadError::InvalidDomain);
     }
     reader.expect(b',')?;
@@ -621,7 +671,7 @@ fn parse_provider(
 ) -> Result<(ProviderEntry, usize), PayloadError> {
     reader.expect(b'{')?;
     reader.expect_key("id")?;
-    let id = reader.string()?;
+    let id = reader.string("provider.id")?;
     reader.expect(b',')?;
     reader.expect_key("models")?;
     reader.expect(b'[')?;
@@ -657,7 +707,7 @@ fn parse_provider(
 fn parse_model(reader: &mut PayloadReader<'_>) -> Result<ModelEntry, PayloadError> {
     reader.expect(b'{')?;
     reader.expect_key("name")?;
-    let name = reader.string()?;
+    let name = reader.string("model.name")?;
     reader.expect(b',')?;
     reader.expect_key("capabilities")?;
     reader.expect(b'[')?;
@@ -672,7 +722,7 @@ fn parse_model(reader: &mut PayloadReader<'_>) -> Result<ModelEntry, PayloadErro
                     limit: CONTROL_CAPABILITIES_MAX,
                 });
             }
-            let label = reader.string()?;
+            let label = reader.string("model.capabilities")?;
             let capability =
                 Capability::from_label(&label).ok_or(PayloadError::UnknownCapability)?;
             capabilities.push(capability);

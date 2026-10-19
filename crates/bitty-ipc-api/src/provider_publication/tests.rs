@@ -1249,6 +1249,125 @@ fn canonical_parser_rejects_unsorted_and_duplicate_collections() {
 }
 
 #[test]
+fn overlong_identity_is_rejected_at_the_bound() {
+    let overlong = "a".repeat(CONTROL_STRING_MAX_BYTES + 1);
+    let json = projection_json(&provider_json(
+        &overlong,
+        &model_json("model-a", r#""text""#),
+    ));
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(json.as_bytes()),
+        Err(PayloadError::InvalidText {
+            field: "provider.id",
+            reason: TextViolation::TooLong {
+                limit: CONTROL_STRING_MAX_BYTES,
+                actual: CONTROL_STRING_MAX_BYTES + 1
+            }
+        })
+    );
+
+    // A very long literal is refused at the 129th byte, not after scanning
+    // the whole field.
+    let huge = "a".repeat(260_000);
+    let json = projection_json(&provider_json(&huge, &model_json("model-a", r#""text""#)));
+    assert!(json.len() <= CONTROL_PAYLOAD_MAX_BYTES);
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(json.as_bytes()),
+        Err(PayloadError::InvalidText {
+            field: "provider.id",
+            reason: TextViolation::TooLong {
+                limit: CONTROL_STRING_MAX_BYTES,
+                actual: CONTROL_STRING_MAX_BYTES + 1
+            }
+        })
+    );
+}
+
+#[test]
+fn long_valid_multibyte_strings_parse_at_the_bound() {
+    let identity = "é".repeat(64);
+    let model_name = "日".repeat(42);
+    assert_eq!(identity.len(), CONTROL_STRING_MAX_BYTES);
+    assert_eq!(model_name.len(), 126);
+
+    let projection = ProviderRoutingProjection::new(vec![
+        ProviderEntry::new(
+            identity,
+            vec![model(&model_name, vec![Capability::Text], 0, 0, 0)],
+        )
+        .expect("multi-byte identity"),
+    ])
+    .expect("projection");
+    let bytes = projection.canonical_bytes();
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(&bytes).expect("canonical multi-byte payload"),
+        projection
+    );
+
+    let too_long = "é".repeat(64) + "a";
+    assert_eq!(too_long.len(), CONTROL_STRING_MAX_BYTES + 1);
+    let json = projection_json(&provider_json(
+        &too_long,
+        &model_json("model-a", r#""text""#),
+    ));
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(json.as_bytes()),
+        Err(PayloadError::InvalidText {
+            field: "provider.id",
+            reason: TextViolation::TooLong {
+                limit: CONTROL_STRING_MAX_BYTES,
+                actual: CONTROL_STRING_MAX_BYTES + 1
+            }
+        })
+    );
+}
+
+#[test]
+fn invalid_utf8_payload_fails_closed_before_parsing() {
+    let invalid = PayloadError::InvalidText {
+        field: "payload",
+        reason: TextViolation::InvalidUtf8,
+    };
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(&[0xff]),
+        Err(invalid)
+    );
+
+    let mut bytes = two_provider_projection().canonical_bytes();
+    let index = find(&bytes, b"alpha");
+    bytes[index] = 0xff;
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(&bytes),
+        Err(invalid)
+    );
+
+    let mut bytes = two_provider_projection().canonical_bytes();
+    bytes.push(0xff);
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(&bytes),
+        Err(invalid)
+    );
+}
+
+#[test]
+fn overlong_numeric_run_is_rejected_at_the_u32_digit_bound() {
+    let digits = "9".repeat(100_000);
+    let json = projection_json(&provider_json(
+        "alpha",
+        &format!(
+            r#"{{"name":"model-a","capabilities":["text"],"context_window_tokens":{digits},"input_cost_weight":0,"output_cost_weight":0}}"#
+        ),
+    ));
+    assert!(json.len() <= CONTROL_PAYLOAD_MAX_BYTES);
+    assert_eq!(
+        ProviderRoutingProjection::parse_canonical(json.as_bytes()),
+        Err(PayloadError::NumberOutOfRange {
+            field: "context_window_tokens"
+        })
+    );
+}
+
+#[test]
 fn canonical_parser_enforces_collection_bounds() {
     let models = |count: usize| {
         (0..count)

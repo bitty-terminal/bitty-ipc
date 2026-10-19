@@ -76,7 +76,7 @@ pub enum PayloadError {
     },
     /// A capability label is outside the closed vocabulary.
     UnknownCapability,
-    /// A bounded provider or model string is invalid.
+    /// A bounded provider/model string or the whole payload text is invalid.
     InvalidText {
         /// Stable field name.
         field: &'static str,
