@@ -40,6 +40,7 @@ pub mod deadline;
 pub mod error;
 pub mod frame;
 pub mod json;
+pub mod provider_publication;
 pub mod reassembly;
 pub mod refusal;
 pub mod schema;
@@ -60,6 +61,26 @@ pub use frame::{Frame, Framer, MAX_BUFFERED_BYTES, MAX_FRAME_BYTES, decode_frame
 pub use json::{
     MAX_AGENT_ALIAS_BYTES, MAX_MANIFEST_FIELD_BYTES, validate_alias, validate_manifest_field,
     validate_params_json, validate_result_json,
+};
+pub use provider_publication::{
+    ALPN_PROTOCOL, AckBody, AckId, AdmitBody, AdmittedBody, BOOTSTRAP_FORMAT_VERSION, BindBody,
+    BoundBody, CONTROL_ACTIVE_RECEIPTS, CONTROL_BOOTSTRAP_MAX_BYTES, CONTROL_CAPABILITIES_MAX,
+    CONTROL_ENDPOINT_HANDLES_MAX, CONTROL_ESTABLISH_TIMEOUT, CONTROL_FRAME_MAX_BYTES,
+    CONTROL_FRAME_PREFIX_BYTES, CONTROL_HANDSHAKE_MAX_BYTES, CONTROL_HEADER_BYTES,
+    CONTROL_INFLIGHT_MAX_BYTES, CONTROL_JSON_DEPTH_MAX, CONTROL_MAGIC, CONTROL_MODELS_MAX,
+    CONTROL_PAYLOAD_MAX_BYTES, CONTROL_PENDING_PUBLICATIONS, CONTROL_PENDING_STRICT_REQUESTS,
+    CONTROL_PROFILE, CONTROL_PROTOCOL_VERSION, CONTROL_PROVIDER_GROUPS_MAX,
+    CONTROL_QUEUE_MAX_RECORDS, CONTROL_RECORD_BURST, CONTROL_RECORD_BURST_WINDOW,
+    CONTROL_RECORD_RATE, CONTROL_SESSION_MAX_AGE, CONTROL_SMALL_RECORD_MAX_BYTES,
+    CONTROL_STRING_MAX_BYTES, CONTROL_TLS_BUFFER_MAX_BYTES, CONTROL_TRANSACTION_TIMEOUT,
+    CONTROL_VERSION, Capability, ControlError, ControlRecord, DELEGATION_PURPOSE, Digest,
+    Direction, Domain, ErrorCode, EstablishedBody, EstablishmentEcho, InvalidateBody,
+    KEY_MATERIAL_PROFILE, KEY_TYPE_ECDSA_P256, Kind, LAUNCH_CERT_MAX_BYTES, LAUNCH_KEY_MAX_BYTES,
+    LIFETIME_SECRET_BYTES, LifetimeBody, LifetimeId, ModelEntry, Nonce, PROVIDER_ROUTING_DOMAIN,
+    PayloadError, ProjectionBody, ProviderEntry, ProviderRoutingProjection, PublicationId,
+    PublishBody, RANDOM_ID_BYTES, ROLE_CORE, ROLE_HELPER, Reason, ReceiptId, RecordBody,
+    RecordHeader, Sender, SessionId, TextViolation, Tuple, next_expected_sequence,
+    validate_incoming_sequence, validate_session,
 };
 pub use reassembly::{
     ChunkReassembler, FeedOutcome, MAX_ASSEMBLY_BYTES, MAX_CHUNKS_PER_ASSEMBLY,
