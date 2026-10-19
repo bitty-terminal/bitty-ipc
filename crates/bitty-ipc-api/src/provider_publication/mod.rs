@@ -27,7 +27,8 @@
 //! # Named bounds
 //!
 //! The constants in this module are the single source for the proposed policy
-//! bounds in the draft control protocol. They are **proposed policy
+//! bounds used by the control record codec; TLS wrapper limits around the
+//! transport stay out of scope here. They are **proposed policy
 //! constants, not current implementation claims**: no transport in this
 //! repository is required to implement them yet. Units are bytes, records,
 //! entries, levels, or seconds as named.

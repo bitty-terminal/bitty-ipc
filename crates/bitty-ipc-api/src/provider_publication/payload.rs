@@ -15,8 +15,10 @@
 //! - the digest is lowercase hexadecimal SHA-256 over exactly these bytes.
 //!
 //! The rules and byte output intentionally match the reviewed AI-0324/AI-0330
-//! baseline. `0` keeps the registry meanings of unknown context window and
-//! uncalibrated cost weight.
+//! baseline, except for one deliberate correction: the baseline emitted a lone
+//! backslash for `"`, which is not a valid JSON escape; this module emits the
+//! required backslash-plus-quote pair. `0` keeps the registry meanings of
+//! unknown context window and uncalibrated cost weight.
 
 use std::cmp::Ordering;
 
