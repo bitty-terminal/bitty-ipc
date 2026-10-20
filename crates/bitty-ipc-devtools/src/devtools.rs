@@ -440,15 +440,21 @@ pub use record::{
     recording_count_for_tests, replay_recording, set_recording_opt_in, start_recording,
     stop_recording,
 };
+#[cfg(windows)]
+pub use serve::bind_windows_pipe_listener;
 #[cfg(unix)]
 pub use serve::serve_bound_connection;
 #[cfg(unix)]
 pub use serve::serve_bound_connection_with_endpoint_budget;
+#[cfg(windows)]
+pub use serve::serve_bound_pipe_connection_with_endpoint_budget;
 pub use serve::{
-    ConnectedPeerProof, ConnectionStats, DirAttestation, HandleOutcome, ServeContext, ServerInfo,
-    SocketEndpointIdentity, SocketEnv, attest_bound_socket, encode_error, encode_success,
-    handle_envelope, id_zero_error, max_connections, prepare_socket_dir, resolve_socket_path,
-    resolve_socket_path_from_env, verify_connected_endpoint, verify_socket_endpoint_for_connect,
+    ConnectedPeerProof, ConnectionStats, DirAttestation, HandleOutcome,
+    MAX_WINDOWS_PIPE_NAME_CHARS, ServeContext, ServerInfo, SocketEndpointIdentity, SocketEnv,
+    attest_bound_socket, encode_error, encode_success, handle_envelope, id_zero_error,
+    max_connections, prepare_socket_dir, resolve_socket_path, resolve_socket_path_from_env,
+    resolve_windows_pipe_path_from_env, verify_connected_endpoint,
+    verify_socket_endpoint_for_connect,
 };
 pub use trace::{
     MAX_ACTIVE_TRACES, MAX_TRACE_BYTES, MAX_TRACE_DURATION_MS, TRACE_CHUNK_BYTES,

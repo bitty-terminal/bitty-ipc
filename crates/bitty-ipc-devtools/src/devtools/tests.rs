@@ -6045,3 +6045,278 @@ fn plugin_runtime_param_gates_generation_ownership() {
         );
     }
 }
+
+// ── Windows named-pipe transport (CTX-0016, issues bitty#2244/#2243) ───────
+
+#[test]
+fn windows_pipe_endpoint_derives_from_instance_identity() {
+    // Platform-neutral: the default Windows endpoint is derived from the
+    // validated instance identity, never a hardcoded pipe name. The explicit
+    // override is accepted only as a pipe device path.
+    let env = SocketEnv {
+        bitty_socket: None,
+        xdg_runtime_dir: None,
+        instance_id: Some("alpha-1".to_string()),
+    };
+    let (path, instance) = resolve_windows_pipe_path_from_env(&env).unwrap();
+    assert_eq!(instance, "alpha-1");
+    assert_eq!(path, windows_pipe_name("alpha-1"));
+    assert!(path.starts_with(WINDOWS_PIPE_NAMESPACE));
+    assert!(path.ends_with("bitty-alpha-1"));
+
+    let custom = format!("{WINDOWS_PIPE_NAMESPACE}bitty-custom");
+    let env = SocketEnv {
+        bitty_socket: Some(custom.clone()),
+        xdg_runtime_dir: None,
+        instance_id: Some("custom".to_string()),
+    };
+    let (path, instance) = resolve_windows_pipe_path_from_env(&env).unwrap();
+    assert_eq!(path, custom);
+    assert_eq!(instance, "custom");
+
+    // A filesystem-socket override does not become a silent Unix fallback.
+    let env = SocketEnv {
+        bitty_socket: Some("/run/user/1000/bitty/default.sock".to_string()),
+        xdg_runtime_dir: None,
+        instance_id: None,
+    };
+    assert!(resolve_windows_pipe_path_from_env(&env).is_err());
+
+    // A malformed instance never reaches the namespace.
+    let env = SocketEnv {
+        bitty_socket: None,
+        xdg_runtime_dir: None,
+        instance_id: Some("bad id".to_string()),
+    };
+    assert!(resolve_windows_pipe_path_from_env(&env).is_err());
+}
+
+#[test]
+fn windows_transport_reuses_shared_frame_and_continuation_bounds() {
+    // Platform-neutral: the pipe path has no second framing. It consumes the
+    // same 256 KiB frame bound and 1 MiB logical continuation bound as the
+    // Unix path, and oversize frames are refused before allocation.
+    assert_eq!(MAX_FRAME_BYTES, 256 * 1024);
+    assert_eq!(
+        CONTINUATION_CHUNK_BYTES + CONTINUATION_HEADER_BYTES,
+        MAX_FRAME_BYTES
+    );
+    assert_eq!(MAX_LOGICAL_REQUEST_BYTES, 1024 * 1024);
+    assert_eq!(
+        encode_frame(&vec![0u8; MAX_FRAME_BYTES]).unwrap().len(),
+        4 + MAX_FRAME_BYTES
+    );
+    assert!(encode_frame(&vec![0u8; MAX_FRAME_BYTES + 1]).is_err());
+    assert!(encode_frame(&vec![0u8; MAX_LOGICAL_REQUEST_BYTES]).is_err());
+}
+
+#[cfg(windows)]
+mod windows_pipe {
+    use super::*;
+    use bitty_ipc_api::error::IpcError;
+    use bitty_ipc_api::scope::{Scope, ScopeSet};
+    use bitty_ipc_core::limits::RateLimiter;
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
+
+    fn unique_pipe() -> String {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let id = format!(
+            "test-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        windows_pipe_name(&id)
+    }
+
+    fn inspect_grant() -> ScopeSet {
+        let mut granted = ScopeSet::cli_default();
+        granted.insert(Scope::DebugInspect);
+        granted
+    }
+
+    fn spawn_server(
+        pipe: String,
+        granted: ScopeSet,
+    ) -> std::thread::JoinHandle<Result<ConnectionStats, IpcError>> {
+        std::thread::spawn(move || {
+            let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+                &pipe,
+                u32::try_from(max_connections()).unwrap_or(16),
+            )
+            .map_err(|err| IpcError::Unavailable {
+                reason: format!("listener bind failed: {err}"),
+            })?;
+            let shutdown = AtomicBool::new(false);
+            let mut connection =
+                listener
+                    .accept(&shutdown)
+                    .map_err(|err| IpcError::Unavailable {
+                        reason: format!("accept failed: {err}"),
+                    })?;
+            connection.set_read_timeout(Some(Duration::from_secs(CONN_IDLE_TIMEOUT_SECS)));
+            connection.set_write_timeout(Some(Duration::from_secs(CONN_WRITE_TIMEOUT_SECS)));
+            let dispatcher = Dispatcher::with_defaults();
+            let server = ServerInfo::new("test".to_string(), pipe, 80, 24);
+            let mut context = ServeContext::with_granted(&server, granted);
+            let proof = context.bind_connected_pipe(&connection)?;
+            let limiter = Arc::new(Mutex::new(RateLimiter::rc9_default()));
+            let clock = || 0u64;
+            serve_bound_pipe_connection_with_endpoint_budget(
+                &mut connection,
+                &proof,
+                &dispatcher,
+                &context,
+                &limiter,
+                &clock,
+            )
+        })
+    }
+
+    fn read_frame(connection: &mut bitty_ipc_winpipe::PipeConnection) -> Vec<u8> {
+        let mut header = [0u8; 4];
+        connection.read_exact(&mut header).unwrap();
+        let len = u32::from_be_bytes(header) as usize;
+        assert!(len <= MAX_FRAME_BYTES);
+        let mut body = vec![0u8; len];
+        connection.read_exact(&mut body).unwrap();
+        body
+    }
+
+    #[test]
+    fn windows_named_pipe_server_client_roundtrip_is_authenticated() {
+        // Mutation target: disabling the Windows serve path (or the pipe
+        // listener) makes this fail: the client cannot connect, or the server
+        // never answers the ping.
+        let pipe = unique_pipe();
+        let server = spawn_server(pipe.clone(), inspect_grant());
+        let mut client =
+            bitty_ipc_winpipe::connect(&pipe, Duration::from_secs(5)).expect("client connect");
+        // Client-side peer identity: the serving process is the current user.
+        assert_eq!(
+            client.server_sid().expect("server SID"),
+            bitty_ipc_winpipe::current_user_sid().expect("current user SID")
+        );
+        client.set_read_timeout(Some(Duration::from_secs(5)));
+        client.set_write_timeout(Some(Duration::from_secs(5)));
+        let request = br#"{"id":1,"method":"bitty.debug/ping","version":"1.0"}"#;
+        client.write_all(&encode_frame(request).unwrap()).unwrap();
+        let response = read_frame(&mut client);
+        let text = String::from_utf8(response).unwrap();
+        assert!(text.contains("\"ok\":true"), "ping response: {text}");
+        drop(client);
+        let stats = server.join().unwrap().expect("server result");
+        assert_eq!(stats.requests, 1);
+        assert_eq!(stats.responses, 1);
+        // No orphan: a fresh connect now finds no pipe instance.
+        assert!(bitty_ipc_winpipe::connect(&pipe, Duration::from_millis(50)).is_err());
+    }
+
+    #[test]
+    fn windows_named_pipe_ungranted_inspection_is_refused() {
+        // Issue bitty#2243 parity: the pipe transport does not widen the
+        // devtools surface. A same-user peer without `debug.inspect` is
+        // refused even though the connection is authenticated.
+        let pipe = unique_pipe();
+        let server = spawn_server(pipe.clone(), ScopeSet::cli_default());
+        let mut client =
+            bitty_ipc_winpipe::connect(&pipe, Duration::from_secs(5)).expect("client connect");
+        client.set_read_timeout(Some(Duration::from_secs(5)));
+        client.set_write_timeout(Some(Duration::from_secs(5)));
+        let request = br#"{"id":1,"method":"bitty.debug/getGridText","version":"1.0"}"#;
+        client.write_all(&encode_frame(request).unwrap()).unwrap();
+        let response = read_frame(&mut client);
+        let text = String::from_utf8(response).unwrap();
+        assert!(
+            text.contains("ScopeDenied"),
+            "ungranted inspection must be typed ScopeDenied: {text}"
+        );
+        drop(client);
+        let stats = server.join().unwrap().expect("server result");
+        assert_eq!(stats.denied, 1);
+    }
+
+    #[test]
+    fn windows_named_pipe_peer_sid_mismatch_is_refused() {
+        let pipe = unique_pipe();
+        let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+            &pipe,
+            u32::try_from(max_connections()).unwrap_or(16),
+        )
+        .expect("listener bind");
+        let client_pipe = pipe.clone();
+        let client = std::thread::spawn(move || {
+            bitty_ipc_winpipe::connect(&client_pipe, Duration::from_secs(5))
+        });
+        let shutdown = AtomicBool::new(false);
+        let connection = listener.accept(&shutdown).expect("accept");
+        let _client = client.join().unwrap().expect("client connect");
+        let expected = bitty_ipc_winpipe::current_user_sid().expect("current user SID");
+        // Well-known SYSTEM SID S-1-5-18: a real, valid SID that is not the
+        // current user on a normal test runner.
+        let foreign = bitty_ipc_winpipe::Sid::from_bytes(&[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0])
+            .expect("valid SID");
+        assert_ne!(foreign, expected);
+        let server = ServerInfo::new("test".to_string(), pipe, 80, 24);
+        let mut context = ServeContext::with_granted(&server, inspect_grant());
+        let err = context
+            .bind_connected_pipe_for_test(&connection, move |_| {
+                bitty_ipc_auth::verify_windows_peer_for_connection(foreign, expected)
+            })
+            .err()
+            .expect("foreign SID must be refused");
+        assert!(
+            matches!(err, IpcError::Unauthenticated { .. }),
+            "foreign SID must fail closed: {err:?}"
+        );
+    }
+
+    #[test]
+    fn windows_named_pipe_oversize_frame_is_typed_error() {
+        let pipe = unique_pipe();
+        let server = spawn_server(pipe.clone(), inspect_grant());
+        let mut client =
+            bitty_ipc_winpipe::connect(&pipe, Duration::from_secs(5)).expect("client connect");
+        client.set_read_timeout(Some(Duration::from_secs(5)));
+        client.set_write_timeout(Some(Duration::from_secs(5)));
+        // Declare one byte past the shared frame bound; send no payload.
+        client
+            .write_all(&(u32::try_from(MAX_FRAME_BYTES + 1).unwrap()).to_be_bytes())
+            .unwrap();
+        let response = read_frame(&mut client);
+        let text = String::from_utf8(response).unwrap();
+        assert!(text.contains("FrameTooLarge"), "oversize reply: {text}");
+        drop(client);
+        let stats = server.join().unwrap().expect("server result");
+        assert_eq!(stats.framing_errors, 1);
+        assert_eq!(stats.requests, 0);
+    }
+
+    #[test]
+    fn windows_named_pipe_current_user_peer_rechecks_ok() {
+        // The serving context has a bound proof, but a mismatched live client
+        // SID is refused on the per-request recheck path. The injected
+        // verifier models a second local user (the CI runner only has one).
+        let pipe = unique_pipe();
+        let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+            &pipe,
+            u32::try_from(max_connections()).unwrap_or(16),
+        )
+        .expect("listener bind");
+        let client_pipe = pipe.clone();
+        let client = std::thread::spawn(move || {
+            bitty_ipc_winpipe::connect(&client_pipe, Duration::from_secs(5))
+        });
+        let shutdown = AtomicBool::new(false);
+        let connection = listener.accept(&shutdown).expect("accept");
+        let _client = client.join().unwrap().expect("client connect");
+        let server = ServerInfo::new("test".to_string(), pipe, 80, 24);
+        let mut context = ServeContext::with_granted(&server, inspect_grant());
+        context
+            .bind_connected_pipe(&connection)
+            .expect("current-user peer binds");
+        assert!(context.recheck_before_dispatch().is_ok());
+    }
+}

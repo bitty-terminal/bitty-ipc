@@ -30,6 +30,7 @@ dependencies = [
  "bitty-ipc-core",
  "bitty-ipc-devtools",
  "bitty-ipc-mcp",
+ "bitty-ipc-winpipe",
 ]
 
 [[package]]
@@ -41,6 +42,7 @@ name = "bitty-ipc-auth"
 version = "0.0.1"
 dependencies = [
  "bitty-ipc-api",
+ "bitty-ipc-winpipe",
  "getrandom",
  "nix",
  "rustix",
@@ -61,6 +63,7 @@ dependencies = [
  "bitty-ipc-api",
  "bitty-ipc-auth",
  "bitty-ipc-core",
+ "bitty-ipc-winpipe",
  "getrandom",
  "serde",
  "serde_json",
@@ -74,6 +77,13 @@ dependencies = [
  "bitty-ipc-api",
  "bitty-ipc-auth",
  "bitty-ipc-core",
+]
+
+[[package]]
+name = "bitty-ipc-winpipe"
+version = "0.0.1"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]

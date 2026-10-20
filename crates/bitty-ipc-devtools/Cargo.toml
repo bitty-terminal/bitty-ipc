@@ -25,3 +25,8 @@ serde_json = "1.0.135"
 
 [dev-dependencies]
 bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1", features = ["test-support"] }
+
+[target.'cfg(windows)'.dependencies]
+# Shared named-pipe transport (CTX-0016): the serve loop stays generic and
+# reuses the same framing/continuation/timeout machinery as the Unix path.
+bitty-ipc-winpipe = { path = "../bitty-ipc-winpipe", version = "0.0.1" }

@@ -23,6 +23,10 @@ test-support = []
 bitty-ipc-api = { path = "../bitty-ipc-api", version = "0.0.1" }
 getrandom.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# Reviewed safe adapter for the named-pipe client token SID (CTX-0016).
+bitty-ipc-winpipe = { path = "../bitty-ipc-winpipe", version = "0.0.1" }
+
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
 

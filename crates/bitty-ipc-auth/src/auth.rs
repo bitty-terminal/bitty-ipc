@@ -27,12 +27,15 @@
 //!
 //! This module is **bounded and `forbid(unsafe)`**. The platform adapter uses
 //! safe `rustix` or `nix` calls to obtain credentials from the connected Unix
-//! stream; this module verifies the extracted triple and retains only the
-//! sanitized UID marker. Windows named-pipe verification remains an explicit
-//! unsupported result until a safe platform adapter is supplied.
+//! stream, and the reviewed `bitty-ipc-winpipe` adapter to obtain the client
+//! process token SID from a connected Windows named pipe; this module verifies
+//! the extracted identity and retains only a sanitized marker.
 
 use bitty_ipc_api::error::IpcError;
 use bitty_ipc_api::scope::Scope;
+
+#[cfg(windows)]
+use bitty_ipc_winpipe::Sid;
 
 // ── constants ───────────────────────────────────────────────────────────────
 
@@ -122,6 +125,10 @@ pub fn verify_peer_uid(peer: PeerCredentials, expected_uid: u32) -> Result<(), I
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VerifiedPeer {
     peer_uid: u32,
+    /// Windows process token user SID (Unix builds have no SID and keep the
+    /// field out entirely).
+    #[cfg(windows)]
+    peer_sid: Option<Sid>,
 }
 
 impl VerifiedPeer {
@@ -137,13 +144,28 @@ impl VerifiedPeer {
         verify_peer_uid(peer, runtime_uid)?;
         Ok(Self {
             peer_uid: runtime_uid,
+            #[cfg(windows)]
+            peer_sid: None,
         })
     }
 
     /// UID this marker was attested for.
+    ///
+    /// Windows has no UID; the platform reports `0` and the attested identity
+    /// is [`Self::peer_sid`] instead.
     #[must_use]
     pub fn peer_uid(&self) -> u32 {
         self.peer_uid
+    }
+
+    /// Windows process token user SID this marker was attested for.
+    ///
+    /// `None` on the test-only `attested` constructor, which models the Unix
+    /// UID shape.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn peer_sid(&self) -> Option<Sid> {
+        self.peer_sid
     }
 }
 
@@ -165,6 +187,47 @@ pub fn verify_peer_for_connection(
     verify_peer_uid(peer, expected_uid)?;
     Ok(VerifiedPeer {
         peer_uid: expected_uid,
+        #[cfg(windows)]
+        peer_sid: None,
+    })
+}
+
+/// Current Windows process token user SID, mapped to the IPC error surface.
+///
+/// # Errors
+///
+/// Returns `IpcError::Unavailable` when the token cannot be queried; callers
+/// must fail closed, never fall back to an allow-all identity.
+#[cfg(windows)]
+pub fn current_windows_user_sid() -> Result<Sid, IpcError> {
+    bitty_ipc_winpipe::current_user_sid().map_err(|err| IpcError::Unavailable {
+        reason: format!("cannot read the current-user token SID: {err}"),
+    })
+}
+
+/// Verify a connected Windows named-pipe client's SID against the runtime SID.
+///
+/// This is the Windows equivalent of [`verify_peer_for_connection`]: equality
+/// is checked before any request byte is parsed, and a mismatch produces no
+/// marker. A missing client SID (query failure) is the caller's responsibility
+/// to treat as `Unavailable`; this function only compares present identities.
+///
+/// # Errors
+///
+/// Returns `IpcError::Unauthenticated` when the SIDs differ.
+#[cfg(windows)]
+pub fn verify_windows_peer_for_connection(
+    peer_sid: Sid,
+    expected_sid: Sid,
+) -> Result<VerifiedPeer, IpcError> {
+    if peer_sid != expected_sid {
+        return Err(IpcError::Unauthenticated {
+            reason: "pipe peer SID does not match the runtime user SID".into(),
+        });
+    }
+    Ok(VerifiedPeer {
+        peer_uid: 0,
+        peer_sid: Some(expected_sid),
     })
 }
 
