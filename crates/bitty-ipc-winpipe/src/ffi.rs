@@ -31,14 +31,13 @@ use windows_sys::Win32::Foundation::{
     GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, TRUE, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
-    SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetExplicitEntriesFromAclW, GetSecurityInfo,
+    NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID,
 };
 use windows_sys::Win32::Security::{
-    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, GetAce,
-    GetAclInformation, GetLengthSid, GetTokenInformation, INHERITED_ACE,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-    TOKEN_USER, TokenUser,
+    ACL, DACL_SECURITY_INFORMATION, GetLengthSid, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
@@ -57,10 +56,6 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::pipe::Sid;
-
-/// `ACCESS_ALLOWED_ACE_TYPE` (the bindings expose the struct, not the ACE type
-/// constant).
-const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 
 /// `GetOverlappedResultEx` infinite wait.
 const INFINITE_MS: u32 = u32::MAX;
@@ -376,79 +371,63 @@ pub(crate) fn attest_current_user_only(handle: HANDLE, expected: Sid) -> io::Res
                 "pipe has a null DACL (allow-all)",
             ));
         }
-        let mut info = ACL_SIZE_INFORMATION::default();
+        // Enumerate the DACL through `GetExplicitEntriesFromAclW`, which
+        // copies the ACEs into a typed, API-owned array. No raw ACE pointer
+        // arithmetic is performed here; every entry is checked to be a plain
+        // grant to the expected SID with no inheritance or second trustee.
+        let mut count = 0u32;
+        let mut entries: *mut EXPLICIT_ACCESS_W = ptr::null_mut();
         // SAFETY: `dacl` is the live ACL inside the security descriptor above;
-        // `info` is exactly the size and class the call expects.
-        check(unsafe {
-            GetAclInformation(
-                dacl,
-                (&raw mut info).cast::<c_void>(),
-                size_of::<ACL_SIZE_INFORMATION>() as u32,
-                AclSizeInformation,
-            )
-        })?;
-        // Bounds-check every ACE against the ACL's own reported byte length
-        // before dereferencing it. `GetAce` returns pointers into the ACL; a
-        // malformed descriptor must never make this read past that allocation.
-        let acl_start = dacl as usize;
-        let acl_end = acl_start.saturating_add(info.AclBytesInUse as usize);
-        let ace_header_len = size_of::<ACE_HEADER>();
-        for index in 0..info.AceCount {
-            let mut ace: *mut c_void = ptr::null_mut();
-            // SAFETY: `dacl` is live and `index` is below its reported count;
-            // `ace` receives a pointer into the same allocation.
-            check(unsafe { GetAce(dacl, index, &mut ace) })?;
-            if ace.is_null() {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL contains a null ACE",
-                ));
-            }
-            let ace_addr = ace as usize;
-            if ace_addr < acl_start || ace_addr.saturating_add(ace_header_len) > acl_end {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL contains an out-of-bounds ACE",
-                ));
-            }
-            // SAFETY: the ACE header lies wholly inside the live ACL (checked
-            // above); `read_unaligned` copies its four bytes without creating a
-            // reference to a potentially unaligned ACE.
-            let header = unsafe { ptr::read_unaligned(ace.cast::<ACE_HEADER>()) };
-            if header.AceType != ACCESS_ALLOWED_ACE_TYPE
-                || (header.AceFlags as u32 & INHERITED_ACE) != 0
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL contains a deny, inherited, or non-allow ACE",
-                ));
-            }
-            let ace_size = usize::from(header.AceSize);
-            let sid_offset = size_of::<u32>() * 2;
-            if ace_size < sid_offset + 8 || ace_addr.saturating_add(ace_size) > acl_end {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL contains a malformed ACE",
-                ));
-            }
-            // SAFETY: the SID starts after the ACE header and mask; the whole
-            // ACE (including its SID) is inside the live ACL by `ace_size`.
-            let ace_sid_ptr = ace.wrapping_byte_add(sid_offset);
-            let ace_sid = sid_from_ptr(ace_sid_ptr)?;
-            if ace_sid.len() + sid_offset > ace_size {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL ACE SID exceeds the ACE size",
-                ));
-            }
-            if ace_sid != expected {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "pipe DACL grants a SID other than the current user",
-                ));
-            }
+        // `count` and `entries` are stack out-parameters. On success the API
+        // allocates an array this function frees with LocalFree below.
+        let status = unsafe { GetExplicitEntriesFromAclW(dacl, &mut count, &mut entries) };
+        if status != ERROR_SUCCESS {
+            return Err(os_error(status));
         }
-        Ok(())
+        if entries.is_null() || count == 0 || count > 16 {
+            // SAFETY: `entries` is either NULL (LocalFree is a no-op) or the
+            // API allocation for `count` entries; it is freed exactly once.
+            unsafe {
+                LocalFree(entries.cast::<c_void>() as HLOCAL);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "pipe DACL has no bounded explicit entries",
+            ));
+        }
+        let result = (|| {
+            // SAFETY: the API returned `count` initialized entries in one
+            // allocation (count was bounded above), and the allocation is
+            // freed only after this slice is no longer used.
+            let entries = unsafe { std::slice::from_raw_parts(entries, count as usize) };
+            for entry in entries {
+                if entry.grfAccessMode != GRANT_ACCESS
+                    || entry.grfInheritance != 0
+                    || entry.Trustee.TrusteeForm != TRUSTEE_IS_SID
+                    || entry.Trustee.MultipleTrusteeOperation != NO_MULTIPLE_TRUSTEE
+                    || !entry.Trustee.pMultipleTrustee.is_null()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "pipe DACL contains a deny, inherited, or non-SID entry",
+                    ));
+                }
+                let ace_sid = sid_from_ptr(entry.Trustee.ptstrName.cast::<c_void>())?;
+                if ace_sid != expected {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "pipe DACL grants a SID other than the current user",
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        // SAFETY: `entries` is the allocation returned above (or NULL);
+        // LocalFree releases it exactly once after the slice borrow ends.
+        unsafe {
+            LocalFree(entries.cast::<c_void>() as HLOCAL);
+        }
+        result
     })();
     // SAFETY: `descriptor` is the allocation produced by GetSecurityInfo (or
     // NULL on failure, where LocalFree(NULL) is a no-op).

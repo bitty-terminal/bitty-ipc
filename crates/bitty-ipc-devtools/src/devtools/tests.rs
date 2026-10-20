@@ -6215,6 +6215,33 @@ mod windows_pipe {
     }
 
     #[test]
+    fn windows_named_pipe_granted_inspection_roundtrip() {
+        // Issue bitty#2243: `debug.inspect` over the Windows pipe under an
+        // explicit grant serves the same live store as the Unix path.
+        let _introspection_guard = super::lock_introspection_for_test();
+        clear_introspection_for_tests();
+        publish_grid_text(vec!["windows inspect".to_string()], 0, 4, true, 1, 80, 24);
+        let pipe = unique_pipe();
+        let server = spawn_server(pipe.clone(), inspect_grant());
+        let mut client =
+            bitty_ipc_winpipe::connect(&pipe, Duration::from_secs(5)).expect("client connect");
+        client.set_read_timeout(Some(Duration::from_secs(5)));
+        client.set_write_timeout(Some(Duration::from_secs(5)));
+        let request = br#"{"id":1,"method":"bitty.debug/getGridText","version":"1.0"}"#;
+        client.write_all(&encode_frame(request).unwrap()).unwrap();
+        let response = read_frame(&mut client);
+        let text = String::from_utf8(response).unwrap();
+        assert!(
+            text.contains("windows inspect"),
+            "granted inspection must return the published grid: {text}"
+        );
+        drop(client);
+        let stats = server.join().unwrap().expect("server result");
+        assert_eq!(stats.requests, 1);
+        clear_introspection_for_tests();
+    }
+
+    #[test]
     fn windows_named_pipe_ungranted_inspection_is_refused() {
         // Issue bitty#2243 parity: the pipe transport does not widen the
         // devtools surface. A same-user peer without `debug.inspect` is
