@@ -24,3 +24,17 @@ check-all-features:
 
 actionlint:
     actionlint -color
+
+# Publish a redacted CarryCtx snapshot to refs/heads/carryctx-snapshots.
+workflow-publish:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    carryctx export --pack-format dir -o "$tmp" --publication
+    git push origin refs/heads/carryctx-snapshots
+
+# Fetch and import the published CarryCtx snapshot (fresh-clone recovery).
+workflow-import:
+    git fetch origin refs/heads/carryctx-snapshots:refs/remotes/origin/carryctx-snapshots
+    carryctx import --from-git refs/remotes/origin/carryctx-snapshots
