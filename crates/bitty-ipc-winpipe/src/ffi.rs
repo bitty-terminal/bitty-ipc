@@ -523,7 +523,7 @@ pub(crate) fn accept_connection(
             match error.raw_os_error() {
                 Some(code) if code == WAIT_TIMEOUT as i32 => {
                     if shutdown.load(Ordering::SeqCst) {
-                        cancel_and_drain(handle, &overlapped)?;
+                        let _ = cancel_and_drain(handle, &overlapped)?;
                         return Err(io::Error::new(
                             io::ErrorKind::Interrupted,
                             "pipe accept cancelled by shutdown",
@@ -547,7 +547,7 @@ pub(crate) fn accept_connection(
                     continue 'recycle;
                 }
                 _ => {
-                    cancel_and_drain(handle, &overlapped)?;
+                    let _ = cancel_and_drain(handle, &overlapped)?;
                     return Err(error);
                 }
             }
@@ -564,16 +564,24 @@ fn timeout_ms(timeout: Option<Duration>) -> u32 {
 }
 
 /// Cancels a timed-out overlapped operation and waits for its completion.
-fn cancel_and_drain(handle: HANDLE, overlapped: &OVERLAPPED) -> io::Result<()> {
+///
+/// Returns `Some(n)` when the operation actually completed before the cancel
+/// landed (`n` bytes transferred), so a caller can honor completed I/O instead
+/// of discarding it as a timeout. Returns `None` when the operation was
+/// canceled/failed; either way the caller's buffer is safe to release.
+fn cancel_and_drain(handle: HANDLE, overlapped: &OVERLAPPED) -> io::Result<Option<u32>> {
     // SAFETY: `overlapped` identifies the pending operation on `handle`; after
     // CancelIoEx, GetOverlappedResult(TRUE) waits until the operation is
-    // complete (reported as aborted), so the caller's buffer is safe to release.
+    // complete (success, error, or aborted), so the caller's buffer is safe to
+    // release.
     unsafe {
         CancelIoEx(handle, overlapped);
         let mut transferred = 0u32;
-        GetOverlappedResult(handle, overlapped, &mut transferred, TRUE);
+        if GetOverlappedResult(handle, overlapped, &mut transferred, TRUE) != FALSE {
+            return Ok(Some(transferred));
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Reads up to `buf.len()` bytes with an optional timeout.
@@ -622,7 +630,11 @@ pub(crate) fn read(handle: HANDLE, buf: &mut [u8], timeout: Option<Duration>) ->
     let error = io::Error::last_os_error();
     // Every pending failure drains the operation before `buf`/`overlapped`
     // leave scope, so the kernel can never write into a returned stack frame.
-    cancel_and_drain(handle, &overlapped)?;
+    if let Some(completed) = cancel_and_drain(handle, &overlapped)? {
+        if completed > 0 {
+            return Ok(completed as usize);
+        }
+    }
     if error.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
@@ -687,7 +699,11 @@ pub(crate) fn write(handle: HANDLE, buf: &[u8], timeout: Option<Duration>) -> io
     }
     let error = io::Error::last_os_error();
     // Drain before the buffer leaves scope; see `read`.
-    cancel_and_drain(handle, &overlapped)?;
+    if let Some(completed) = cancel_and_drain(handle, &overlapped)? {
+        if completed > 0 {
+            return Ok(completed as usize);
+        }
+    }
     if error.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
