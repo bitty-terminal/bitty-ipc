@@ -24,3 +24,12 @@ check-all-features:
 
 actionlint:
     actionlint -color
+
+# Publish a redacted CarryCtx snapshot to refs/heads/carryctx-snapshots.
+workflow-publish:
+    ./scripts/workflow-publish.sh
+
+# Fetch and import the published CarryCtx snapshot (fresh-clone recovery).
+workflow-import:
+    git fetch origin refs/heads/carryctx-snapshots:refs/remotes/origin/carryctx-snapshots
+    carryctx import --from-git refs/remotes/origin/carryctx-snapshots
