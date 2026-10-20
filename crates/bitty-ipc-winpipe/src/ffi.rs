@@ -35,8 +35,8 @@ use windows_sys::Win32::Security::Authorization::{
     SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION,
-    GetAce, GetAclInformation, GetLengthSid, GetTokenInformation, INHERITED_ACE,
+    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, GetAce,
+    GetAclInformation, GetLengthSid, GetTokenInformation, INHERITED_ACE,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
     TOKEN_USER, TokenUser,
 };
@@ -387,6 +387,12 @@ pub(crate) fn attest_current_user_only(handle: HANDLE, expected: Sid) -> io::Res
                 AclSizeInformation,
             )
         })?;
+        // Bounds-check every ACE against the ACL's own reported byte length
+        // before dereferencing it. `GetAce` returns pointers into the ACL; a
+        // malformed descriptor must never make this read past that allocation.
+        let acl_start = dacl as usize;
+        let acl_end = acl_start.saturating_add(info.AclBytesInUse as usize);
+        let ace_header_len = size_of::<ACE_HEADER>();
         for index in 0..info.AceCount {
             let mut ace: *mut c_void = ptr::null_mut();
             // SAFETY: `dacl` is live and `index` is below its reported count;
@@ -398,22 +404,43 @@ pub(crate) fn attest_current_user_only(handle: HANDLE, expected: Sid) -> io::Res
                     "pipe DACL contains a null ACE",
                 ));
             }
-            // SAFETY: `ace` points at an ACE within the live ACL; `ACCESS_
-            // ALLOWED_ACE` is the layout for allow ACEs (header + mask + SID).
-            let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
-            if allowed.Header.AceType != ACCESS_ALLOWED_ACE_TYPE
-                || (allowed.Header.AceFlags as u32 & INHERITED_ACE) != 0
+            let ace_addr = ace as usize;
+            if ace_addr < acl_start || ace_addr.saturating_add(ace_header_len) > acl_end {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "pipe DACL contains an out-of-bounds ACE",
+                ));
+            }
+            // SAFETY: the ACE header lies wholly inside the live ACL (checked
+            // above); `read_unaligned` copies its four bytes without creating a
+            // reference to a potentially unaligned ACE.
+            let header = unsafe { ptr::read_unaligned(ace.cast::<ACE_HEADER>()) };
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE
+                || (header.AceFlags as u32 & INHERITED_ACE) != 0
             {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "pipe DACL contains a deny, inherited, or non-allow ACE",
                 ));
             }
-            // SAFETY: `SidStart` is the first byte of the SID inside a
-            // variable-length ACCESS_ALLOWED_ACE (header 4 + mask 4); the ACE
-            // was read from the same live ACL.
-            let ace_sid_ptr = ace.wrapping_byte_add(8);
+            let ace_size = usize::from(header.AceSize);
+            let sid_offset = size_of::<u32>() * 2;
+            if ace_size < sid_offset + 8 || ace_addr.saturating_add(ace_size) > acl_end {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "pipe DACL contains a malformed ACE",
+                ));
+            }
+            // SAFETY: the SID starts after the ACE header and mask; the whole
+            // ACE (including its SID) is inside the live ACL by `ace_size`.
+            let ace_sid_ptr = ace.wrapping_byte_add(sid_offset);
             let ace_sid = sid_from_ptr(ace_sid_ptr)?;
+            if ace_sid.len() + sid_offset > ace_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "pipe DACL ACE SID exceeds the ACE size",
+                ));
+            }
             if ace_sid != expected {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,

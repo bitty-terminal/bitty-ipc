@@ -6141,14 +6141,14 @@ mod windows_pipe {
         pipe: String,
         granted: ScopeSet,
     ) -> std::thread::JoinHandle<Result<ConnectionStats, IpcError>> {
+        // Bind in the caller so the pipe exists before the test connects;
+        // the accept loop itself runs on the worker thread.
+        let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+            &pipe,
+            u32::try_from(max_connections()).unwrap_or(16),
+        )
+        .expect("listener bind");
         std::thread::spawn(move || {
-            let mut listener = bitty_ipc_winpipe::PipeListener::bind(
-                &pipe,
-                u32::try_from(max_connections()).unwrap_or(16),
-            )
-            .map_err(|err| IpcError::Unavailable {
-                reason: format!("listener bind failed: {err}"),
-            })?;
             let shutdown = AtomicBool::new(false);
             let mut connection =
                 listener
