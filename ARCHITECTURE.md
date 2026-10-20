@@ -13,9 +13,9 @@ bitty-ipc-api (zero dependencies)
     ↓
 bitty-ipc-core (framing, transport)
     ↓
-bitty-ipc-auth (platform auth + Windows SID verification)
-    ↓
 bitty-ipc-winpipe (Windows named-pipe adapter)
+    ↓
+bitty-ipc-auth (platform auth + Windows SID verification)
     ↓
 ├─ bitty-ipc-devtools (DevTools protocol)
 ├─ bitty-ipc-mcp (MCP adapter)
@@ -135,7 +135,6 @@ Tests live in each crate:
 
 ## Future Work
 
-- [ ] Windows named pipe support in `bitty-ipc-auth`
 - [ ] macOS getpeereid support in `bitty-ipc-auth`
 - [ ] `bitty-ipc-lua`: Lua FFI bindings for plugin access
 - [ ] Async/await transport layer (currently synchronous)

@@ -26,9 +26,10 @@ use std::ptr;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY,
-    ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, ERROR_SUCCESS, FALSE, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, TRUE, WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_IO_PENDING,
+    ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, ERROR_SUCCESS,
+    FALSE, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, TRUE,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -41,18 +42,19 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
 };
 use windows_sys::Win32::System::IO::{
     CancelIoEx, GetOverlappedResult, GetOverlappedResultEx, OVERLAPPED,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
-    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
-    SetNamedPipeHandleState, WaitNamedPipeW,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
+    GetNamedPipeServerProcessId, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_WAIT, SetNamedPipeHandleState, WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateEventW, GetCurrentProcess, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 use crate::pipe::Sid;
@@ -73,6 +75,17 @@ fn owned_or_null(raw: HANDLE) -> io::Result<OwnedHandle> {
     // returned a fresh handle this process owns and nothing else references;
     // `OwnedHandle` takes sole ownership and closes it exactly once.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+/// Creates a manual-reset, initially non-signaled, unnamed event.
+///
+/// Each overlapped operation uses its own event: signaling completion through
+/// the pipe handle is ambiguous when a duplex connection has concurrent reads
+/// and writes on shared clone handles.
+fn operation_event() -> io::Result<OwnedHandle> {
+    // SAFETY: default security attributes, manual-reset, initially
+    // non-signaled, unnamed event; the handle is checked for NULL.
+    owned_or_null(unsafe { CreateEventW(ptr::null(), TRUE, FALSE, ptr::null()) })
 }
 
 /// Maps a Win32 `BOOL` result onto `io::Result`.
@@ -326,7 +339,18 @@ pub(crate) fn create_pipe(
         )
     };
     if raw == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        // `FILE_FLAG_FIRST_PIPE_INSTANCE` reports an existing pipe (a live
+        // Bitty instance or a foreign squatter) as ERROR_ACCESS_DENIED. Map
+        // that collision to AddrInUse so the servo can report "already
+        // served" instead of an authentication failure.
+        if first_instance && error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "pipe name is already owned by another server",
+            ));
+        }
+        return Err(error);
     }
     owned_or_null(raw)
 }
@@ -440,7 +464,10 @@ pub(crate) fn attest_current_user_only(handle: HANDLE, expected: Sid) -> io::Res
 /// Waits for one client to connect to `handle`.
 ///
 /// `shutdown` is checked every `poll` interval while the overlapped connect is
-/// pending, so the accept thread can stop without waiting for a client.
+/// pending, so the accept thread can stop without waiting for a client. A
+/// client that connects and closes before `ConnectNamedPipe` observes it
+/// (`ERROR_NO_DATA`) recycles the same instance with `DisconnectNamedPipe`
+/// instead of killing the listener.
 pub(crate) fn accept_connection(
     handle: HANDLE,
     shutdown: &std::sync::atomic::AtomicBool,
@@ -448,46 +475,82 @@ pub(crate) fn accept_connection(
 ) -> io::Result<()> {
     use std::sync::atomic::Ordering;
 
-    let mut overlapped = OVERLAPPED::default();
-    // SAFETY: `handle` is a live overlapped pipe instance; `overlapped` is a
-    // stack frame that stays alive until this function returns (after the
-    // operation is complete or cancelled).
-    let ok = unsafe { ConnectNamedPipe(handle, &mut overlapped) };
-    if ok != FALSE {
-        return Ok(());
-    }
-    let error = io::Error::last_os_error();
-    match error.raw_os_error() {
-        Some(code) if code == ERROR_PIPE_CONNECTED as i32 => return Ok(()),
-        Some(code) if code == ERROR_IO_PENDING as i32 => {}
-        _ => return Err(error),
-    }
     let poll_ms = poll.as_millis().clamp(1, u32::MAX as u128 - 1) as u32;
-    loop {
-        let mut transferred = 0u32;
-        // SAFETY: `handle` and `overlapped` identify the pending connect above;
-        // `transferred` is a stack out-parameter.
-        let done =
-            unsafe { GetOverlappedResultEx(handle, &overlapped, &mut transferred, poll_ms, FALSE) };
-        if done != FALSE {
+    'recycle: loop {
+        let event = operation_event()?;
+        let mut overlapped = OVERLAPPED {
+            hEvent: event.as_raw_handle(),
+            ..Default::default()
+        };
+        // SAFETY: `handle` is a live overlapped pipe instance; `overlapped`
+        // and its event stay alive until the operation completes or is
+        // cancelled below.
+        let ok = unsafe { ConnectNamedPipe(handle, &mut overlapped) };
+        if ok != FALSE {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(WAIT_TIMEOUT as i32) {
-            return Err(error);
-        }
-        if shutdown.load(Ordering::SeqCst) {
-            // SAFETY: the same pending operation; cancel then wait for the
-            // cancellation to complete so `overlapped` may leave scope.
-            unsafe {
-                CancelIoEx(handle, &overlapped);
-                let mut transferred = 0u32;
-                GetOverlappedResult(handle, &overlapped, &mut transferred, TRUE);
+        match error.raw_os_error() {
+            Some(code) if code == ERROR_PIPE_CONNECTED as i32 => return Ok(()),
+            Some(code) if code == ERROR_IO_PENDING as i32 => {}
+            Some(code) if code == ERROR_NO_DATA as i32 => {
+                // SAFETY: `handle` is a live server-side pipe instance that
+                // has no connected client; disconnect recycles it.
+                unsafe {
+                    DisconnectNamedPipe(handle);
+                }
+                if shutdown.load(Ordering::SeqCst) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "pipe accept cancelled by shutdown",
+                    ));
+                }
+                continue 'recycle;
             }
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "pipe accept cancelled by shutdown",
-            ));
+            _ => return Err(error),
+        }
+        loop {
+            let mut transferred = 0u32;
+            // SAFETY: `handle`, `overlapped`, and `event` identify the pending
+            // connect above; `transferred` is a stack out-parameter.
+            let done = unsafe {
+                GetOverlappedResultEx(handle, &overlapped, &mut transferred, poll_ms, FALSE)
+            };
+            if done != FALSE {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(code) if code == WAIT_TIMEOUT as i32 => {
+                    if shutdown.load(Ordering::SeqCst) {
+                        cancel_and_drain(handle, &overlapped)?;
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "pipe accept cancelled by shutdown",
+                        ));
+                    }
+                }
+                Some(code) if code == ERROR_NO_DATA as i32 || code == ERROR_BROKEN_PIPE as i32 => {
+                    // The pending connect completed with a peer that already
+                    // closed. The operation is complete (no drain needed);
+                    // recycle the instance and wait for the next client.
+                    // SAFETY: `handle` is a live server-side pipe instance.
+                    unsafe {
+                        DisconnectNamedPipe(handle);
+                    }
+                    if shutdown.load(Ordering::SeqCst) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "pipe accept cancelled by shutdown",
+                        ));
+                    }
+                    continue 'recycle;
+                }
+                _ => {
+                    cancel_and_drain(handle, &overlapped)?;
+                    return Err(error);
+                }
+            }
         }
     }
 }
@@ -519,10 +582,15 @@ pub(crate) fn read(handle: HANDLE, buf: &mut [u8], timeout: Option<Duration>) ->
         return Ok(0);
     }
     let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    let mut overlapped = OVERLAPPED::default();
+    let event = operation_event()?;
+    let mut overlapped = OVERLAPPED {
+        hEvent: event.as_raw_handle(),
+        ..Default::default()
+    };
     let mut read = 0u32;
     // SAFETY: `handle` is a live overlapped pipe; `buf` is live for at least
-    // `len` bytes; `overlapped` stays alive until the operation completes.
+    // `len` bytes; `overlapped` and its event stay alive until the operation
+    // completes or is cancelled below.
     let ok = unsafe { ReadFile(handle, buf.as_mut_ptr(), len, &mut read, &mut overlapped) };
     if ok != FALSE {
         return Ok(read as usize);
@@ -552,8 +620,10 @@ pub(crate) fn read(handle: HANDLE, buf: &mut [u8], timeout: Option<Duration>) ->
         return Ok(transferred as usize);
     }
     let error = io::Error::last_os_error();
+    // Every pending failure drains the operation before `buf`/`overlapped`
+    // leave scope, so the kernel can never write into a returned stack frame.
+    cancel_and_drain(handle, &overlapped)?;
     if error.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
-        cancel_and_drain(handle, &overlapped)?;
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "pipe read timed out",
@@ -573,10 +643,15 @@ pub(crate) fn write(handle: HANDLE, buf: &[u8], timeout: Option<Duration>) -> io
         return Ok(0);
     }
     let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    let mut overlapped = OVERLAPPED::default();
+    let event = operation_event()?;
+    let mut overlapped = OVERLAPPED {
+        hEvent: event.as_raw_handle(),
+        ..Default::default()
+    };
     let mut written = 0u32;
     // SAFETY: `handle` is a live overlapped pipe; `buf` is live for at least
-    // `len` bytes; `overlapped` stays alive until the operation completes.
+    // `len` bytes; `overlapped` and its event stay alive until the operation
+    // completes or is cancelled below.
     let ok = unsafe { WriteFile(handle, buf.as_ptr(), len, &mut written, &mut overlapped) };
     if ok != FALSE {
         return Ok(written as usize);
@@ -611,11 +686,21 @@ pub(crate) fn write(handle: HANDLE, buf: &[u8], timeout: Option<Duration>) -> io
         return Ok(transferred as usize);
     }
     let error = io::Error::last_os_error();
+    // Drain before the buffer leaves scope; see `read`.
+    cancel_and_drain(handle, &overlapped)?;
     if error.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
-        cancel_and_drain(handle, &overlapped)?;
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "pipe write timed out",
+        ));
+    }
+    if error.raw_os_error() == Some(ERROR_NO_DATA as i32)
+        || error.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32)
+        || error.raw_os_error() == Some(ERROR_PIPE_NOT_CONNECTED as i32)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "pipe peer closed",
         ));
     }
     Err(error)
@@ -636,7 +721,10 @@ pub(crate) fn connect_client(name: &str, wait: Duration) -> io::Result<OwnedHand
                 0,
                 ptr::null(),
                 OPEN_EXISTING,
-                FILE_FLAG_OVERLAPPED,
+                // Identification-level impersonation: the server may query
+                // this client's identity but cannot act as it. Without the
+                // SQOS flags Windows defaults to SecurityImpersonation.
+                FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
                 ptr::null_mut(),
             )
         };

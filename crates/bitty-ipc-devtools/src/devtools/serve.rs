@@ -377,6 +377,12 @@ pub struct ConnectedPeerProof {
     /// re-reads the served pipe's client pid and requires equality.
     #[cfg(windows)]
     client_pid: u32,
+    /// Retained connection handle identity (shares one `Arc` with the
+    /// recheck probe). Two connections from one client process share a PID
+    /// but never this identity, so a proof cannot be replayed onto another
+    /// accepted connection.
+    #[cfg(windows)]
+    connection: PipeConnection,
     recheck: Arc<PeerRecheck>,
 }
 
@@ -400,7 +406,7 @@ impl ConnectedPeerProof {
 
     #[cfg(windows)]
     fn binding_matches(&self, other: &Self) -> bool {
-        self.client_pid == other.client_pid
+        self.connection.same_connection(&other.connection) && self.client_pid == other.client_pid
     }
 
     #[cfg(unix)]
@@ -420,7 +426,7 @@ impl ConnectedPeerProof {
     where
         F: FnOnce(&PipeConnection) -> Result<u32, IpcError>,
     {
-        Ok(stream_pid(stream)? == self.client_pid)
+        Ok(self.connection.same_connection(stream) && stream_pid(stream)? == self.client_pid)
     }
 
     #[cfg(all(test, unix))]
@@ -661,6 +667,7 @@ impl ServeContext {
         let proof = ConnectedPeerProof {
             identity,
             client_pid,
+            connection: probe.clone(),
             recheck: Arc::new(move || verifier(&probe)),
         };
         self.peer = Some(proof.clone());

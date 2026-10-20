@@ -6215,6 +6215,103 @@ mod windows_pipe {
     }
 
     #[test]
+    fn windows_named_pipe_bind_collision_is_addr_in_use() {
+        // CodeRabbit follow-up: FIRST_PIPE_INSTANCE reports an existing pipe
+        // as ERROR_ACCESS_DENIED; the transport must classify it as
+        // AddrInUse so the servo reports "already served".
+        let pipe = unique_pipe();
+        let _first = bitty_ipc_winpipe::PipeListener::bind(&pipe, 16).expect("first bind");
+        let err = bitty_ipc_winpipe::PipeListener::bind(&pipe, 16)
+            .err()
+            .expect("second bind must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn windows_named_pipe_proof_cannot_cross_connections() {
+        // Two connections from the same client process share a PID; the
+        // proof must still be bound to the accepted connection identity.
+        let pipe = unique_pipe();
+        let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+            &pipe,
+            u32::try_from(max_connections()).unwrap_or(16),
+        )
+        .expect("listener bind");
+        let client_pipe = pipe.clone();
+        let client_a = std::thread::spawn(move || {
+            bitty_ipc_winpipe::connect(&client_pipe, Duration::from_secs(5))
+        });
+        let shutdown = AtomicBool::new(false);
+        let connection_a = listener.accept(&shutdown).expect("accept A");
+        let _client_a = client_a.join().unwrap().expect("client A");
+        let client_pipe = pipe.clone();
+        let client_b = std::thread::spawn(move || {
+            bitty_ipc_winpipe::connect(&client_pipe, Duration::from_secs(5))
+        });
+        let mut connection_b = listener.accept(&shutdown).expect("accept B");
+        let _client_b = client_b.join().unwrap().expect("client B");
+        assert_eq!(
+            connection_a.peer_pid().expect("A pid"),
+            connection_b.peer_pid().expect("B pid"),
+            "both clients are this process"
+        );
+        let server = ServerInfo::new("test".to_string(), pipe, 80, 24);
+        let mut context = ServeContext::with_granted(&server, inspect_grant());
+        let proof_a = context.bind_connected_pipe(&connection_a).expect("bind A");
+        let dispatcher = Dispatcher::with_defaults();
+        let limiter = Arc::new(Mutex::new(RateLimiter::rc9_default()));
+        let clock = || 0u64;
+        let err = serve_bound_pipe_connection_with_endpoint_budget(
+            &mut connection_b,
+            &proof_a,
+            &dispatcher,
+            &context,
+            &limiter,
+            &clock,
+        )
+        .err()
+        .expect("proof A must not serve connection B");
+        assert!(matches!(err, IpcError::Unauthenticated { .. }));
+    }
+
+    #[test]
+    fn windows_named_pipe_short_lived_probe_does_not_kill_listener() {
+        // A client that connects and closes before accept must recycle the
+        // instance (ERROR_NO_DATA), not terminate the listener.
+        let pipe = unique_pipe();
+        let mut listener = bitty_ipc_winpipe::PipeListener::bind(
+            &pipe,
+            u32::try_from(max_connections()).unwrap_or(16),
+        )
+        .expect("listener bind");
+        {
+            let _probe =
+                bitty_ipc_winpipe::connect(&pipe, Duration::from_secs(5)).expect("probe connect");
+        }
+        let client_pipe = pipe.clone();
+        let client = std::thread::spawn(move || {
+            bitty_ipc_winpipe::connect(&client_pipe, Duration::from_secs(5))
+        });
+        let shutdown = AtomicBool::new(false);
+        // The first accept may see the already-closed probe (ConnectNamedPipe
+        // reporting ERROR_PIPE_CONNECTED for a stale peer) or recycle it into
+        // the real client. Either way the listener must still reach the real
+        // peer on this or the next accept.
+        let server = ServerInfo::new("test".to_string(), pipe, 80, 24);
+        let mut bound = false;
+        for _ in 0..2 {
+            let connection = listener.accept(&shutdown).expect("accept after probe");
+            let mut context = ServeContext::with_granted(&server, inspect_grant());
+            if context.bind_connected_pipe(&connection).is_ok() {
+                bound = true;
+                break;
+            }
+        }
+        let _client = client.join().unwrap().expect("client connect");
+        assert!(bound, "listener must survive the short-lived probe");
+    }
+
+    #[test]
     fn windows_named_pipe_granted_inspection_roundtrip() {
         // Issue bitty#2243: `debug.inspect` over the Windows pipe under an
         // explicit grant serves the same live store as the Unix path.

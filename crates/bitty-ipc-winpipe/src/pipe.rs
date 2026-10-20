@@ -102,8 +102,10 @@ pub struct PipeListener {
 impl PipeListener {
     /// Create the first instance of `name` for the current user.
     ///
-    /// `max_connections` bounds concurrently served connections; the listener
-    /// keeps one extra instance for the pending accept.
+    /// `max_connections` bounds concurrently served connections. The kernel
+    /// instance ceiling allows the pending accept plus the next listener
+    /// created while an over-cap connection is being shed, so the listener
+    /// never dies at the RC-9 cap.
     ///
     /// # Errors
     ///
@@ -113,7 +115,7 @@ impl PipeListener {
     pub fn bind(name: &str, max_connections: u32) -> io::Result<Self> {
         ffi::wide_name(name)?;
         let user_sid = ffi::current_user_sid()?;
-        let max_instances = max_connections.saturating_add(1).clamp(2, 255);
+        let max_instances = max_connections.saturating_add(2).clamp(2, 255);
         let handle = ffi::create_pipe(name, true, max_instances, user_sid)?;
         ffi::attest_current_user_only(handle.as_raw_handle(), user_sid)?;
         Ok(Self {
@@ -196,6 +198,16 @@ impl PipeConnection {
 
     fn raw_handle(&self) -> HANDLE {
         self.inner.handle.as_raw_handle()
+    }
+
+    /// Whether both values refer to the same accepted pipe connection.
+    ///
+    /// Clones share one connection identity; two connections accepted from
+    /// the same client process do not. Proof binding uses this so a proof
+    /// captured from one connection cannot be replayed onto another.
+    #[must_use]
+    pub fn same_connection(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     /// Client process id (server side).
