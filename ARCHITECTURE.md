@@ -13,7 +13,9 @@ bitty-ipc-api (zero dependencies)
     ↓
 bitty-ipc-core (framing, transport)
     ↓
-bitty-ipc-auth (platform auth)
+bitty-ipc-winpipe (Windows named-pipe adapter)
+    ↓
+bitty-ipc-auth (platform auth + Windows SID verification)
     ↓
 ├─ bitty-ipc-devtools (DevTools protocol)
 ├─ bitty-ipc-mcp (MCP adapter)
@@ -42,11 +44,25 @@ Core IPC primitives:
 
 ### `bitty-ipc-auth`
 
-Platform-specific authentication (Linux/Unix):
+Platform-specific authentication (Linux/Unix/Windows):
 
-- `auth.rs`: Peer credential verification (`verify_peer_for_connection`)
+- `auth.rs`: Peer credential verification (`verify_peer_for_connection`), Windows
+  client token SID verification (`verify_windows_peer_for_connection`)
 - `peer.rs`: `StreamIdentity`, `VerifiedPeer`, `PeerCredentials`
-- Uses `rustix` for SO_PEERCRED socket option
+- Uses `rustix`/`nix` for SO_PEERCRED/LOCAL_PEERCRED and `bitty-ipc-winpipe`
+  for `GetNamedPipeClientProcessId` plus token SID comparison
+
+### `bitty-ipc-winpipe`
+
+Narrow reviewed Win32 named-pipe adapter (Windows-only; empty surface elsewhere):
+
+- Protected current-user-only DACL with post-create endpoint attestation
+- `PipeListener`/`PipeConnection` with `PIPE_REJECT_REMOTE_CLIENTS`
+- Overlapped I/O and bounded per-read/write timeouts
+- Client-side server process SID verification
+
+All `unsafe` lives in the private `ffi` module; the safe surface exposes only
+SID values, owned handles, and `Read`/`Write`.
 
 ### `bitty-ipc-devtools`
 
@@ -119,7 +135,6 @@ Tests live in each crate:
 
 ## Future Work
 
-- [ ] Windows named pipe support in `bitty-ipc-auth`
 - [ ] macOS getpeereid support in `bitty-ipc-auth`
 - [ ] `bitty-ipc-lua`: Lua FFI bindings for plugin access
 - [ ] Async/await transport layer (currently synchronous)

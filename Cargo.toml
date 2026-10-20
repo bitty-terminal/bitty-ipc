@@ -6,6 +6,7 @@ members = [
     "crates/bitty-ipc-auth",
     "crates/bitty-ipc-devtools",
     "crates/bitty-ipc-mcp",
+    "crates/bitty-ipc-winpipe",
     "crates/bitty-ipc",
 ]
 
@@ -26,6 +27,11 @@ all = { level = "warn", priority = -1 }
 # Platform auth adapters
 rustix = { version = "1.1", default-features = false }
 nix = { version = "0.31", default-features = false }
+
+# Windows named-pipe transport (CTX-0016): the narrow reviewed FFI adapter.
+# Non-Windows targets compile `bitty-ipc-winpipe` to an empty surface and do
+# not link any Win32 API.
+windows-sys = { version = "0.61", default-features = false }
 
 # CSPRNG for automation bearer tokens (CTX-0792)
 getrandom = "0.4"

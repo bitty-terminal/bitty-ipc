@@ -29,6 +29,10 @@ bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1" }
 bitty-ipc-devtools = { path = "../bitty-ipc-devtools", version = "0.0.1" }
 bitty-ipc-mcp = { path = "../bitty-ipc-mcp", version = "0.0.1", optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# Windows named-pipe transport surface (`bitty_ipc::winpipe`), CTX-0016.
+bitty-ipc-winpipe = { path = "../bitty-ipc-winpipe", version = "0.0.1" }
+
 [dev-dependencies]
 bitty-ipc = { path = ".", features = ["test-support"] }
 bitty-ipc-auth = { path = "../bitty-ipc-auth", version = "0.0.1", features = ["test-support"] }

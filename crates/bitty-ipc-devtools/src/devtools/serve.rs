@@ -4,7 +4,6 @@ use super::handlers::json_escape_into;
 use super::json::truncate_chars;
 
 use bitty_ipc_api::error::IpcError;
-#[cfg(unix)]
 use bitty_ipc_api::frame::{MAX_FRAME_BYTES, encode_frame};
 use bitty_ipc_auth::auth::VerifiedPeer;
 #[cfg(unix)]
@@ -12,15 +11,15 @@ use bitty_ipc_auth::auth::{DIR_MODE, SOCKET_MODE};
 #[cfg(all(test, unix))]
 use bitty_ipc_auth::auth::{PeerCredentials, verify_peer_uid};
 use bitty_ipc_core::limits::RC9_MAX_CONNECTIONS;
-#[cfg(unix)]
 use bitty_ipc_core::limits::RateLimiter;
 use std::fmt;
-#[cfg(unix)]
 use std::io::{Read, Write};
 use std::sync::Arc;
-#[cfg(unix)]
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(windows)]
+use bitty_ipc_winpipe::{PipeConnection, PipeListener};
 
 // ── socket path ─────────────────────────────────────────────────────────────
 
@@ -223,6 +222,91 @@ pub fn resolve_socket_path_from_env(
     Ok((path, env.effective_instance()))
 }
 
+/// Maximum Windows named-pipe path length in UTF-16 code units.
+///
+/// The Win32 pipe namespace accepts a bounded name; this is the documented
+/// ceiling, checked before any UTF-16 buffer is handed to the platform. The
+/// default path is always short (instance ids are at most 64 bytes), so only
+/// an explicit `BITTY_SOCKET` override can approach it.
+pub const MAX_WINDOWS_PIPE_NAME_CHARS: usize = 256;
+
+/// Resolve `(pipe_path, instance)` for a Windows instance from advisory
+/// environment (CTX-0016).
+///
+/// Precedence matches the Unix resolver: a non-empty `BITTY_SOCKET` wins when
+/// it is a `\\.\pipe\` device path; otherwise
+/// [`windows_pipe_name`]`(instance)` derives the endpoint from the validated
+/// instance identity. `BITTY_SOCKET` and `BITTY_INSTANCE_ID` stay advisory:
+/// the client still verifies the server process token SID and the server still
+/// verifies the client SID before any request byte.
+///
+/// # Errors
+///
+/// Returns `InvalidRequest` for an invalid instance id, a NUL, an overlong
+/// pipe path, or a `BITTY_SOCKET` value that is not a pipe device path.
+pub fn resolve_windows_pipe_path_from_env(env: &SocketEnv) -> Result<(String, String), IpcError> {
+    let instance = env.effective_instance();
+    validate_instance_id(&instance)?;
+    if let Some(path) = env
+        .bitty_socket
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        if path.contains('\0') {
+            return Err(IpcError::InvalidRequest {
+                reason: "BITTY_SOCKET contains NUL".into(),
+            });
+        }
+        if path.encode_utf16().count() >= MAX_WINDOWS_PIPE_NAME_CHARS {
+            return Err(IpcError::InvalidRequest {
+                reason: format!(
+                    "BITTY_SOCKET pipe path exceeds {MAX_WINDOWS_PIPE_NAME_CHARS} UTF-16 code units"
+                ),
+            });
+        }
+        let Some(bare) = path.strip_prefix(WINDOWS_PIPE_NAMESPACE) else {
+            return Err(IpcError::InvalidRequest {
+                reason: format!(
+                    "BITTY_SOCKET on Windows must be a {WINDOWS_PIPE_NAMESPACE} device path"
+                ),
+            });
+        };
+        if bare.is_empty() {
+            return Err(IpcError::InvalidRequest {
+                reason: "BITTY_SOCKET names the pipe namespace root".into(),
+            });
+        }
+        return Ok((path.to_string(), instance));
+    }
+    Ok((windows_pipe_name(&instance), instance))
+}
+
+/// Bind a Windows pipe listener, mapping platform failures to the IPC error
+/// surface (CTX-0016).
+///
+/// # Errors
+///
+/// `Unavailable` when the name is already served by a live instance or bind
+/// fails; `Unauthenticated` when the created endpoint does not attest as
+/// current-user-only. Never falls back to an unauthenticated transport.
+#[cfg(windows)]
+pub fn bind_windows_pipe_listener(
+    pipe_path: &str,
+    max_connections: u32,
+) -> Result<PipeListener, IpcError> {
+    PipeListener::bind(pipe_path, max_connections).map_err(|err| match err.kind() {
+        std::io::ErrorKind::AddrInUse => IpcError::Unavailable {
+            reason: format!("pipe {pipe_path} is already served by a live instance"),
+        },
+        std::io::ErrorKind::PermissionDenied => IpcError::Unauthenticated {
+            reason: format!("pipe endpoint rejected: {err}"),
+        },
+        _ => IpcError::Unavailable {
+            reason: format!("bind {pipe_path} failed: {err}"),
+        },
+    })
+}
+
 // ── server info ─────────────────────────────────────────────────────────────
 
 /// Static server description captured at serve time (wired by `bitty-terminal`).
@@ -289,6 +373,16 @@ pub struct ConnectedPeerProof {
     identity: VerifiedPeer,
     #[cfg(unix)]
     stream_identity: StreamIdentity,
+    /// Client process id captured at accept; the Windows binding check
+    /// re-reads the served pipe's client pid and requires equality.
+    #[cfg(windows)]
+    client_pid: u32,
+    /// Retained connection handle identity (shares one `Arc` with the
+    /// recheck probe). Two connections from one client process share a PID
+    /// but never this identity, so a proof cannot be replayed onto another
+    /// accepted connection.
+    #[cfg(windows)]
+    connection: PipeConnection,
     recheck: Arc<PeerRecheck>,
 }
 
@@ -298,11 +392,21 @@ impl ConnectedPeerProof {
         self.identity
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn same_binding(&self, other: &Self) -> bool {
         self.identity == other.identity
-            && self.stream_identity == other.stream_identity
+            && self.binding_matches(other)
             && Arc::ptr_eq(&self.recheck, &other.recheck)
+    }
+
+    #[cfg(unix)]
+    fn binding_matches(&self, other: &Self) -> bool {
+        self.stream_identity == other.stream_identity
+    }
+
+    #[cfg(windows)]
+    fn binding_matches(&self, other: &Self) -> bool {
+        self.connection.same_connection(&other.connection) && self.client_pid == other.client_pid
     }
 
     #[cfg(unix)]
@@ -315,6 +419,14 @@ impl ConnectedPeerProof {
         F: FnOnce(&std::os::unix::net::UnixStream) -> Result<StreamIdentity, IpcError>,
     {
         Ok(stream_identity(stream)? == self.stream_identity)
+    }
+
+    #[cfg(windows)]
+    fn matches_pipe_with<F>(&self, stream: &PipeConnection, stream_pid: F) -> Result<bool, IpcError>
+    where
+        F: FnOnce(&PipeConnection) -> Result<u32, IpcError>,
+    {
+        Ok(self.connection.same_connection(stream) && stream_pid(stream)? == self.client_pid)
     }
 
     #[cfg(all(test, unix))]
@@ -506,7 +618,79 @@ impl ServeContext {
         self.bind_connected_stream_with(stream, verifier)
     }
 
-    #[cfg(unix)]
+    /// Bind an accepted named-pipe connection to the runtime user SID
+    /// (CTX-0016, the Windows equivalent of `bind_connected_stream`).
+    ///
+    /// The client process token user SID is compared with the current process
+    /// token user SID before the proof is created; the client process id is
+    /// captured as the stream binding and re-read on every privileged
+    /// recheck, so a proof captured from one connection cannot be replayed
+    /// onto another.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` when the client identity cannot be read, and
+    /// `Unauthenticated` when the SIDs differ or the identity changes during
+    /// binding.
+    #[cfg(windows)]
+    pub fn bind_connected_pipe(
+        &mut self,
+        stream: &PipeConnection,
+    ) -> Result<ConnectedPeerProof, IpcError> {
+        let expected_sid = bitty_ipc_auth::current_windows_user_sid()?;
+        self.bind_connected_pipe_with(stream, move |stream| {
+            let peer_sid = stream.peer_sid().map_err(|err| IpcError::Unavailable {
+                reason: format!("cannot read the named-pipe client SID: {err}"),
+            })?;
+            bitty_ipc_auth::verify_windows_peer_for_connection(peer_sid, expected_sid)
+        })
+    }
+
+    #[cfg(windows)]
+    fn bind_connected_pipe_with<F>(
+        &mut self,
+        stream: &PipeConnection,
+        verifier: F,
+    ) -> Result<ConnectedPeerProof, IpcError>
+    where
+        F: Fn(&PipeConnection) -> Result<VerifiedPeer, IpcError> + Send + Sync + 'static,
+    {
+        let client_pid = pipe_client_pid(stream)?;
+        let identity = verifier(stream)?;
+        if pipe_client_pid(stream)? != client_pid {
+            return Err(IpcError::Unauthenticated {
+                reason: "connected pipe client identity changed during binding".into(),
+            });
+        }
+        let probe = stream.clone();
+        let verifier = Arc::new(verifier);
+        let proof = ConnectedPeerProof {
+            identity,
+            client_pid,
+            connection: probe.clone(),
+            recheck: Arc::new(move || verifier(&probe)),
+        };
+        self.peer = Some(proof.clone());
+        #[cfg(test)]
+        {
+            self.test_dispatch = false;
+        }
+        Ok(proof)
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn bind_connected_pipe_for_test<F>(
+        &mut self,
+        stream: &PipeConnection,
+        verifier: F,
+    ) -> Result<ConnectedPeerProof, IpcError>
+    where
+        F: Fn(&PipeConnection) -> Result<VerifiedPeer, IpcError> + Send + Sync + 'static,
+    {
+        self.bind_connected_pipe_with(stream, verifier)
+    }
+
+    #[cfg(any(unix, windows))]
     pub(crate) fn recheck_before_read(&self, proof: &ConnectedPeerProof) -> Result<(), IpcError> {
         if !self
             .peer
@@ -1518,7 +1702,7 @@ where
 /// value is a token bucket whose timestamp window is evicted per check
 /// ([`bitty_ipc_core::limits::RateLimiter`]), so a recovered limiter cannot grow and
 /// keeps enforcing the remaining budget.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn endpoint_admit(
     endpoint: &Arc<Mutex<RateLimiter>>,
 ) -> impl FnMut(u64) -> Result<(), IpcError> + '_ {
@@ -1559,6 +1743,50 @@ pub fn serve_bound_connection_with_endpoint_budget(
     if !proof.matches_stream_with(stream, bitty_ipc_auth::peer::stream_identity)? {
         return Err(IpcError::Unauthenticated {
             reason: "connected peer proof does not match the accepted stream".into(),
+        });
+    }
+    context.recheck_before_read(proof)?;
+    serve_connection_inner(
+        stream,
+        dispatcher,
+        context,
+        clock_ms,
+        endpoint_admit(endpoint_limiter),
+    )
+}
+
+/// Read the client process id of a served named-pipe connection.
+#[cfg(windows)]
+fn pipe_client_pid(stream: &PipeConnection) -> Result<u32, IpcError> {
+    stream.peer_pid().map_err(|err| IpcError::Unavailable {
+        reason: format!("cannot read the named-pipe client process: {err}"),
+    })
+}
+
+/// Serve one bound Windows named-pipe connection under the shared endpoint
+/// budget, with peer proof (CTX-0016).
+///
+/// This is the Windows production accept-path entry point. It reuses the same
+/// [`serve_connection_inner`] loop, framing, continuation reassembly, timeout
+/// arming, dispatcher, and scope checks as the Unix path; only the transport
+/// descriptor and the peer-identity query differ. Before a byte is served:
+///
+/// 1. the [`ConnectedPeerProof`] client process id must equal the accepted
+///    pipe's client process id;
+/// 2. [`ServeContext::recheck_before_read`] re-reads the live client SID and
+///    refuses a peer that changed after accept.
+#[cfg(windows)]
+pub fn serve_bound_pipe_connection_with_endpoint_budget(
+    stream: &mut PipeConnection,
+    proof: &ConnectedPeerProof,
+    dispatcher: &Dispatcher,
+    context: &ServeContext,
+    endpoint_limiter: &Arc<Mutex<RateLimiter>>,
+    clock_ms: &dyn Fn() -> u64,
+) -> Result<ConnectionStats, IpcError> {
+    if !proof.matches_pipe_with(stream, pipe_client_pid)? {
+        return Err(IpcError::Unauthenticated {
+            reason: "connected peer proof does not match the accepted pipe".into(),
         });
     }
     context.recheck_before_read(proof)?;
@@ -1616,7 +1844,7 @@ impl Dispatcher {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn serve_connection_inner<S, F>(
     stream: &mut S,
     dispatcher: &Dispatcher,
@@ -1756,7 +1984,7 @@ where
 ///
 /// Amendment A4 (#1482): while a continuation reassembly is open, each read
 /// waits at most the time left before the continuation deadline.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) trait ServeStream: Read + Write {
     /// The read timeout configured by the accept path (the idle timeout).
     fn current_read_timeout(&self) -> std::io::Result<Option<std::time::Duration>>;
@@ -1775,6 +2003,18 @@ impl ServeStream for std::os::unix::net::UnixStream {
     }
 }
 
+#[cfg(windows)]
+impl ServeStream for bitty_ipc_winpipe::PipeConnection {
+    fn current_read_timeout(&self) -> std::io::Result<Option<std::time::Duration>> {
+        Ok(self.read_timeout())
+    }
+
+    fn set_next_read_timeout(&self, timeout: Option<std::time::Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(timeout);
+        Ok(())
+    }
+}
+
 /// Per-read timeout state of one served connection.
 ///
 /// With no reassembly open, reads use the idle timeout the accept path
@@ -1782,13 +2022,13 @@ impl ServeStream for std::os::unix::net::UnixStream {
 /// before the continuation deadline (never longer than the idle timeout),
 /// and a read that would start after the deadline fails as `TimedOut`. The
 /// socket option is only rewritten when the wanted value changes.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct ReadArming {
     idle: Option<std::time::Duration>,
     armed: Option<std::time::Duration>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl ReadArming {
     fn new<S: ServeStream>(stream: &S) -> Self {
         let idle = stream.current_read_timeout().ok().flatten();
@@ -1826,7 +2066,7 @@ impl ReadArming {
 ///
 /// A plain `read_exact` would let each partial read wait the full timeout
 /// again, so a slow drip could stretch one frame far past the deadline.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn read_exact_armed<S: ServeStream>(
     stream: &mut S,
     buf: &mut [u8],
@@ -1848,7 +2088,7 @@ fn read_exact_armed<S: ServeStream>(
 }
 
 /// Whether a read failed because the stream stalled (socket read timeout).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn is_read_timeout(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
@@ -1862,7 +2102,7 @@ fn is_read_timeout(err: &std::io::Error) -> bool {
 /// dispatch and the peer receives one `ContinuationTimeout` error with `id` 0
 /// (best effort; the connection closes either way). Returns `false` for an
 /// ordinary idle timeout with nothing buffered.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn report_stalled_continuation<S>(
     stream: &mut S,
     reassembler: &mut Reassembler,
@@ -1880,7 +2120,7 @@ where
 }
 
 /// Frame and write one response payload.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn write_framed<S>(stream: &mut S, response: &[u8]) -> std::io::Result<()>
 where
     S: Read + Write,

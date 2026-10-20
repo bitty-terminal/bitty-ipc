@@ -15,7 +15,9 @@ bitty-ipc-api        # Pure API layer (zero dependencies)
     ↑
 bitty-ipc-core       # Framing, wire, limits, transport
     ↑
-bitty-ipc-auth       # Platform auth (rustix/nix)
+bitty-ipc-auth       # Platform auth (rustix/nix/Win32 SID)
+bitty-ipc-winpipe    # Windows named-pipe transport (Windows-only surface)
+    ↑
 bitty-ipc-devtools   # DevTools protocol
 bitty-ipc-mcp        # MCP adapter (optional, `mcp` feature)
     ↑
@@ -28,7 +30,8 @@ bitty-ipc            # Full implementation (BridgeClient)
 |---|---|
 | [`bitty-ipc-api`](crates/bitty-ipc-api) | Pure types (zero dependencies): error types, scope definitions, wire envelope types, frame types, channel types. The only crate plugins and cross-repo consumers depend on for API contracts. |
 | [`bitty-ipc-core`](crates/bitty-ipc-core) | Core implementation: bounded framing (encode/decode), wire protocol v1, rate limits (RC-9/RC-10), transport stubs, no platform-specific code. |
-| [`bitty-ipc-auth`](crates/bitty-ipc-auth) | Platform authentication: peer credential verification via `rustix` (Linux) and `nix` (macOS/BSD), UID verification, child token management, socket/directory mode checks. |
+| [`bitty-ipc-auth`](crates/bitty-ipc-auth) | Platform authentication: peer credential verification via `rustix` (Linux) and `nix` (macOS/BSD), Windows named-pipe client token SID verification, UID verification, child token management, socket/directory mode checks. |
+| [`bitty-ipc-winpipe`](crates/bitty-ipc-winpipe) | Windows named-pipe transport: current-user-only DACL, endpoint attestation, client/server SID queries, overlapped I/O with per-read/write timeouts. Empty surface off Windows. |
 | [`bitty-ipc-devtools`](crates/bitty-ipc-devtools) | DevTools protocol: `bitty.debug/*` method dispatch, snapshot/ctl/tool_dispatch protocols, headless request parsing. |
 | [`bitty-ipc-mcp`](crates/bitty-ipc-mcp) | MCP adapter: `McpClientStub` with bounded framing, correlation, deterministic timeouts. Optional on the facade (`mcp` feature, default-off). |
 | [`bitty-ipc`](crates/bitty-ipc) | Full implementation: `BridgeClient` composing method registry, scope authorization, consent ledger, bounded endpoint. The published boundary for `bitty-ai`, devtools, and out-of-process consumers. |
@@ -101,7 +104,7 @@ Every byte crossing the IPC/MCP boundary is treated as **untrusted** per ADR-000
 
 ## Layout
 
-- `crates/` — workspace members (`bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`, `bitty-ipc-devtools`, `bitty-ipc-mcp`, `bitty-ipc`)
+- `crates/` — workspace members (`bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`, `bitty-ipc-winpipe`, `bitty-ipc-devtools`, `bitty-ipc-mcp`, `bitty-ipc`)
 
 ## Build and test
 

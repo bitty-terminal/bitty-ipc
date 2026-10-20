@@ -1,0 +1,30 @@
+[package]
+name = "bitty-ipc-winpipe"
+description = "Windows named-pipe transport for Bitty IPC (current-user ACL and SID verification)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ipc", "windows", "named-pipe", "bitty"]
+categories = ["development-tools"]
+
+[lints]
+workspace = true
+
+# The only Windows FFI dependency: Foundation (handles/status), Security
+# (token SIDs and ACL attestation), Security.Authorization (SDDL/SID text),
+# Storage.FileSystem (CreateFileW/ReadFile/WriteFile and pipe flags),
+# System.IO (overlapped I/O), System.Pipes (named pipes), and System.Threading
+# (process/token handles). Non-Windows targets compile this crate to an empty
+# surface with no dependencies.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
