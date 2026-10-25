@@ -24,9 +24,3 @@ pub use bitty_ipc_devtools::*;
 // distinguish transport handles from protocol types.
 #[cfg(windows)]
 pub use bitty_ipc_winpipe as winpipe;
-
-// `bitty-ipc-mcp` is default-off (`mcp` feature): Bitty Core uses nothing
-// from it outside tests (core-audit-2026-10-02.md finding 5;
-// `bitty-terminal-docs` architecture/core-boundaries.md ~198-203).
-#[cfg(feature = "mcp")]
-pub use bitty_ipc_mcp::*;

@@ -27,7 +27,7 @@
 //!     ↑
 //! bitty-ipc-core
 //!     ↑
-//! bitty-ipc-auth, bitty-ipc-devtools, bitty-ipc-mcp
+//! bitty-ipc-auth, bitty-ipc-devtools
 //!     ↑
 //! bitty-ipc
 //! ```

@@ -40,7 +40,7 @@ jobs:
       - run: just check
 
   all-features:
-    name: All-features gate (optional mcp)
+    name: All-features gate (test-support)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

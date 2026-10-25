@@ -3,7 +3,7 @@
 name = "bitty-ipc"
 kind = "extension"
 lang = "rust"
-role = "L1 Rust Core Extension: IPC bridge layer (api + auth + core + devtools + mcp), default-off"
+role = "L1 Rust Core Extension: IPC bridge layer (api + auth + core + devtools)"
 owner = "bitty-core"
 docs = "bitty-terminal-docs"
 
@@ -12,7 +12,6 @@ ipc-api = "crates/bitty-ipc-api" # light contract: IpcMessage/IpcChannel/Error d
 ipc-auth = "crates/bitty-ipc-auth" # authentication/authorization for IPC channels
 ipc-core = "crates/bitty-ipc-core" # core IPC runtime: message routing/serialization
 ipc-devtools = "crates/bitty-ipc-devtools" # DevTools protocol bridge
-ipc-mcp = "crates/bitty-ipc-mcp" # MCP protocol bridge
 ipc = "crates/bitty-ipc" # umbrella crate: re-exports all IPC components
 
 [contracts.consumes]
