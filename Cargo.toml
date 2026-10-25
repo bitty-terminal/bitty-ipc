@@ -5,7 +5,6 @@ members = [
     "crates/bitty-ipc-core",
     "crates/bitty-ipc-auth",
     "crates/bitty-ipc-devtools",
-    "crates/bitty-ipc-mcp",
     "crates/bitty-ipc-winpipe",
     "crates/bitty-ipc",
 ]

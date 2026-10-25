@@ -1,6 +1,6 @@
 # bitty-ipc
 
-An independent L1 Rust Core Extension, extracted from [`bitty`](https://github.com/bitty-terminal/bitty) (Bitty Core): a generic out-of-process IPC bridge boundary (DevTools/MCP protocols, bounded framing, peer-credential auth, scope-based consent).
+An independent L1 Rust Core Extension, extracted from [`bitty`](https://github.com/bitty-terminal/bitty) (Bitty Core): a generic out-of-process IPC bridge boundary (DevTools protocol, bounded framing, peer-credential auth, scope-based consent).
 
 ## Status
 
@@ -19,7 +19,6 @@ bitty-ipc-auth       # Platform auth (rustix/nix/Win32 SID)
 bitty-ipc-winpipe    # Windows named-pipe transport (Windows-only surface)
     ↑
 bitty-ipc-devtools   # DevTools protocol
-bitty-ipc-mcp        # MCP adapter (optional, `mcp` feature)
     ↑
 bitty-ipc            # Full implementation (BridgeClient)
 ```
@@ -33,7 +32,6 @@ bitty-ipc            # Full implementation (BridgeClient)
 | [`bitty-ipc-auth`](crates/bitty-ipc-auth) | Platform authentication: peer credential verification via `rustix` (Linux) and `nix` (macOS/BSD), Windows named-pipe client token SID verification, UID verification, child token management, socket/directory mode checks. |
 | [`bitty-ipc-winpipe`](crates/bitty-ipc-winpipe) | Windows named-pipe transport: current-user-only DACL, endpoint attestation, client/server SID queries, overlapped I/O with per-read/write timeouts. Empty surface off Windows. |
 | [`bitty-ipc-devtools`](crates/bitty-ipc-devtools) | DevTools protocol: `bitty.debug/*` method dispatch, snapshot/ctl/tool_dispatch protocols, headless request parsing. |
-| [`bitty-ipc-mcp`](crates/bitty-ipc-mcp) | MCP adapter: `McpClientStub` with bounded framing, correlation, deterministic timeouts. Optional on the facade (`mcp` feature, default-off). |
 | [`bitty-ipc`](crates/bitty-ipc) | Full implementation: `BridgeClient` composing method registry, scope authorization, consent ledger, bounded endpoint. The published boundary for `bitty-ai`, devtools, and out-of-process consumers. |
 
 ## Use Cases
@@ -50,19 +48,12 @@ bitty-ipc            # Full implementation (BridgeClient)
 [features]
 default = []
 test-support = []  # Hermetic test entry points (dev-only; also on bitty-ipc-auth)
-mcp = ["bitty-ipc-mcp"]  # Optional MCP adapter (McpClientStub); default-off
 ```
 
-`bitty-ipc-mcp` is an optional dependency gated behind the `mcp` feature,
-following the default-off posture `bitty-terminal-docs`
-`architecture/core-boundaries.md` describes for `ipc-mcp`. Bitty Core uses
-nothing from the MCP adapter outside tests, so it stays out of the release
-dependency tree unless a consumer opts in:
-
-```toml
-[dependencies]
-bitty-ipc = { git = "https://github.com/bitty-terminal/bitty-ipc", rev = "<sha>", features = ["mcp"] }
-```
+MCP is deliberately absent from this repository: the protocol implementation is
+agent-only tooling and lives in `bitty-ai` (`crates/bitty-ai-mcp`). This
+repository stays MCP-free and provides only the generic IPC boundary plus the
+MCP scope profiles in `bitty-ipc-api` that any client uses for consent.
 
 ## Consuming from Bitty Core
 
@@ -86,7 +77,7 @@ Bump the pin only through a scoped task once this repo's `main` is green; never 
 
 ## Trust Boundary
 
-Every byte crossing the IPC/MCP boundary is treated as **untrusted** per ADR-0003:
+Every byte crossing the IPC wire boundary is treated as **untrusted** per ADR-0003:
 
 - Hard frame-payload bound: 256 KiB per message (RC-10)
 - Bounded channels/transport and pending table (RC-9)
@@ -104,7 +95,7 @@ Every byte crossing the IPC/MCP boundary is treated as **untrusted** per ADR-000
 
 ## Layout
 
-- `crates/` — workspace members (`bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`, `bitty-ipc-winpipe`, `bitty-ipc-devtools`, `bitty-ipc-mcp`, `bitty-ipc`)
+- `crates/` — workspace members (`bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`, `bitty-ipc-winpipe`, `bitty-ipc-devtools`, `bitty-ipc`)
 
 ## Build and test
 

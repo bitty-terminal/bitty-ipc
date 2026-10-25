@@ -18,7 +18,6 @@ bitty-ipc-winpipe (Windows named-pipe adapter)
 bitty-ipc-auth (platform auth + Windows SID verification)
     ↓
 ├─ bitty-ipc-devtools (DevTools protocol)
-├─ bitty-ipc-mcp (MCP adapter)
 └─ bitty-ipc (full implementation)
 ```
 
@@ -74,13 +73,6 @@ DevTools protocol implementation:
 - `tool_dispatch.rs`: Tool routing/dispatch
 - `frame_digest.rs`: Frame integrity verification
 
-### `bitty-ipc-mcp`
-
-MCP (Model Context Protocol) adapter:
-
-- Converts generic IPC wire format to MCP JSON-RPC protocol
-- Enables LLM tools to interact with Bitty via standardized protocol
-
 ### `bitty-ipc` (umbrella crate)
 
 Full implementation integrating all layers:
@@ -115,13 +107,14 @@ Platform-specific code (Linux SO_PEERCRED, macOS getpeereid) stays isolated in `
 ### Consumer Projects
 
 - `bitty` (Core runtime): Uses for DevTools IPC bridge
-- `bitty-ai`: Uses for agent/LLM tool communication via MCP adapter
+- `bitty-ai`: Uses the IPC boundary for agent/LLM tool communication; its
+  MCP client lives in `bitty-ai` (`crates/bitty-ai-mcp`), not here
 - External devtools clients: Connect via Unix domain sockets
 
 ### Dependencies
 
 - `rustix`: Platform syscalls (SO_PEERCRED)
-- `serde`/`serde_json`: MCP JSON-RPC encoding
+- `serde`/`serde_json`: DevTools DTO encoding
 - No network crates, no AI crates
 
 ## Test Strategy
