@@ -5,12 +5,14 @@ Priority: P2 | Area: area:packaging | Labels: feat,P2,area:packaging
 | Upstream: bitty-terminal/bitty#1512
 
 Scope is this repository only. This note records the ordered first publish
-of the 6 workspace crates at version `0.0.1`, so the owner can execute it
+of the 5 workspace crates at version `0.0.1`, so the owner can execute it
 after the registry token rotation lands (see the Blockers section).
 
 ## Readiness (verified)
 
-- All 6 crate names return "does not exist" on the crates.io API: free.
+- All 5 crate names return "does not exist" on the crates.io API: free.
+  The legacy `bitty-ipc-mcp` stub was retired before the first publish
+  (CTX-1564), so it is never published and needs no yank or deprecation.
 - `cargo publish --dry-run -p bitty-ipc-api` is green (packaged, verified,
   upload aborted as expected for a dry run).
 - `bitty-ipc-core` and `bitty-ipc-auth` dry-runs fail only with
@@ -25,7 +27,7 @@ after the registry token rotation lands (see the Blockers section).
 - The registry token rotation recorded upstream is complete. Never publish
   with a token that may have been exposed; each publish is permanent
   (yank is the only undo).
-- Immediately before publishing, re-check that all six crate names are still
+- Immediately before publishing, re-check that all five crate names are still
   free on the crates.io API. Names are first-come-first-served; the readiness
   check above is point-in-time and the publish may run days after this note.
 - The working tree is clean and on `main`; the crates to publish are
@@ -43,22 +45,19 @@ cargo publish -p bitty-ipc-api
 cargo publish -p bitty-ipc-core
 cargo publish -p bitty-ipc-auth
 cargo publish -p bitty-ipc-devtools
-cargo publish -p bitty-ipc-mcp
 cargo publish -p bitty-ipc
 ```
 
 `bitty-ipc-core` and `bitty-ipc-auth` are independent of each other once
-`-api` is live, so their relative order does not matter; the same holds for
-`-devtools` and `-mcp` once api/core/auth are live. The umbrella `bitty-ipc`
-goes last. The optional `mcp` feature stays default-off; publishing does not
-change feature wiring.
+`-api` is live, so their relative order does not matter; `-devtools` follows
+once api/core/auth are live. The umbrella `bitty-ipc` goes last.
 
 ## Verification
 
 - After each step, confirm the just-published crate is visible in the index
   (`cargo search <crate> --limit 1` for the crate from that step; repeat for
-  all six: `bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`,
-  `bitty-ipc-devtools`, `bitty-ipc-mcp`, `bitty-ipc`).
+  all five: `bitty-ipc-api`, `bitty-ipc-core`, `bitty-ipc-auth`,
+  `bitty-ipc-devtools`, `bitty-ipc`).
 - Every crate page on crates.io shows "Builds on docs.rs" once the docs
   build finishes.
 - Downstream check: a clean scratch crate depending on

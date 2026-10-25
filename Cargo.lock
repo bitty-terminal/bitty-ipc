@@ -29,7 +29,6 @@ dependencies = [
  "bitty-ipc-auth",
  "bitty-ipc-core",
  "bitty-ipc-devtools",
- "bitty-ipc-mcp",
  "bitty-ipc-winpipe",
 ]
 
@@ -68,15 +67,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
-]
-
-[[package]]
-name = "bitty-ipc-mcp"
-version = "0.0.1"
-dependencies = [
- "bitty-ipc-api",
- "bitty-ipc-auth",
- "bitty-ipc-core",
 ]
 
 [[package]]
