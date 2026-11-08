@@ -173,6 +173,19 @@ impl Framer {
         self.buf.clear();
     }
 
+    /// Total wire bytes (`4 + body_len`) required to complete the currently
+    /// buffered partial frame, or `4` when fewer than 4 header bytes are buffered.
+    #[must_use]
+    pub fn expected_frame_len(&self) -> usize {
+        if self.buf.len() < 4 {
+            4
+        } else {
+            let len =
+                u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
+            4usize.saturating_add(len)
+        }
+    }
+
     /// Feed `bytes` into the framer and extract completed frames.
     ///
     /// The returned vector contains zero or more fully decoded frames in the
@@ -189,22 +202,23 @@ impl Framer {
     /// `MAX_BUFFERED_BYTES` and the bound cannot be respected as a streaming
     /// buffer. This is also fail-closed and clears the buffer.
     pub fn push_bytes(&mut self, bytes: &[u8]) -> Result<Vec<Frame>, IpcError> {
-        if self.buf.len() + bytes.len() > MAX_BUFFERED_BYTES && bytes.len() > MAX_BUFFERED_BYTES {
+        let next_len = self.buf.len().saturating_add(bytes.len());
+        if next_len > MAX_BUFFERED_BYTES && bytes.len() > MAX_BUFFERED_BYTES {
             // Single push itself is huge; refuse without buffering unbounded.
             self.buf.clear();
             return Err(IpcError::PayloadTooLarge {
                 field: "framer.buffer".into(),
                 limit: MAX_BUFFERED_BYTES,
-                actual: self.buf.len() + bytes.len(),
+                actual: next_len,
             });
         }
-        if self.buf.len() + bytes.len() > MAX_BUFFERED_BYTES + MAX_FRAME_BYTES {
+        if next_len > MAX_BUFFERED_BYTES + MAX_FRAME_BYTES {
             // Pathological buffering of many tiny pushes; bound the total.
             self.buf.clear();
             return Err(IpcError::PayloadTooLarge {
                 field: "framer.buffer".into(),
                 limit: MAX_BUFFERED_BYTES + MAX_FRAME_BYTES,
-                actual: self.buf.len() + bytes.len(),
+                actual: next_len,
             });
         }
         self.buf.extend_from_slice(bytes);
@@ -384,5 +398,24 @@ mod tests {
     fn encode_empty_frame_is_four_zero_bytes() {
         let wire = encode_frame(b"").unwrap();
         assert_eq!(wire, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn framer_overflow_reports_pre_clear_actual_length() {
+        let mut framer = Framer::new();
+        framer.push_bytes(&[0x00, 0x10]).unwrap();
+        assert_eq!(framer.buffered_len(), 2);
+
+        let huge = vec![0u8; MAX_BUFFERED_BYTES + 1];
+        let err = framer.push_bytes(&huge).unwrap_err();
+        assert_eq!(
+            err,
+            IpcError::PayloadTooLarge {
+                field: "framer.buffer".into(),
+                limit: MAX_BUFFERED_BYTES,
+                actual: 2 + MAX_BUFFERED_BYTES + 1,
+            }
+        );
+        assert!(framer.is_empty());
     }
 }

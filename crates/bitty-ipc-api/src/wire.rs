@@ -171,8 +171,7 @@ pub fn validate_method(method: &str) -> Result<(), IpcError> {
 /// string/ bracket). Callers may do a second full `serde_json` parse; this
 /// check runs first as a cheap gate.
 pub fn validate_json_depth(json: &[u8], max_depth: usize) -> Result<(), IpcError> {
-    let mut depth = 0usize;
-    let mut max_seen = 0usize;
+    let mut stack: Vec<u8> = Vec::with_capacity(max_depth.min(64));
     let mut in_str = false;
     let mut escape = false;
 
@@ -190,25 +189,31 @@ pub fn validate_json_depth(json: &[u8], max_depth: usize) -> Result<(), IpcError
         match b {
             b'"' => in_str = true,
             b'{' | b'[' => {
-                depth += 1;
-                if depth > max_depth {
+                let next_depth = stack.len() + 1;
+                if next_depth > max_depth {
                     return Err(IpcError::PayloadTooLarge {
                         field: "json.depth".into(),
                         limit: max_depth,
-                        actual: depth,
+                        actual: next_depth,
                     });
                 }
-                if depth > max_seen {
-                    max_seen = depth;
-                }
+                stack.push(b);
             }
             b'}' | b']' => {
-                if depth == 0 {
-                    return Err(IpcError::InvalidFrame {
-                        reason: "json: unexpected closing bracket".into(),
-                    });
+                let expected_open = if b == b'}' { b'{' } else { b'[' };
+                match stack.pop() {
+                    None => {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: unexpected closing bracket".into(),
+                        });
+                    }
+                    Some(open) if open != expected_open => {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: mismatched closing bracket".into(),
+                        });
+                    }
+                    Some(_) => {}
                 }
-                depth -= 1;
             }
             _ => {}
         }
@@ -218,13 +223,122 @@ pub fn validate_json_depth(json: &[u8], max_depth: usize) -> Result<(), IpcError
             reason: "json: unclosed string".into(),
         });
     }
-    if depth != 0 {
+    if !stack.is_empty() {
         return Err(IpcError::InvalidFrame {
             reason: "json: unclosed bracket".into(),
         });
     }
-    let _ = max_seen;
     Ok(())
+}
+
+fn unescape_json_key(raw: &str) -> Result<std::borrow::Cow<'_, str>, IpcError> {
+    if !raw.contains('\\') {
+        return Ok(std::borrow::Cow::Borrowed(raw));
+    }
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            let Some(ch) = raw[i..].chars().next() else {
+                break;
+            };
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        i += 1;
+        if i >= bytes.len() {
+            return Err(IpcError::InvalidFrame {
+                reason: "json: truncated escape in key".into(),
+            });
+        }
+        match bytes[i] {
+            b'"' => {
+                out.push('"');
+                i += 1;
+            }
+            b'\\' => {
+                out.push('\\');
+                i += 1;
+            }
+            b'/' => {
+                out.push('/');
+                i += 1;
+            }
+            b'b' => {
+                out.push('\u{0008}');
+                i += 1;
+            }
+            b'f' => {
+                out.push('\u{000c}');
+                i += 1;
+            }
+            b'n' => {
+                out.push('\n');
+                i += 1;
+            }
+            b'r' => {
+                out.push('\r');
+                i += 1;
+            }
+            b't' => {
+                out.push('\t');
+                i += 1;
+            }
+            b'u' => {
+                i += 1;
+                if i + 4 > bytes.len() {
+                    return Err(IpcError::InvalidFrame {
+                        reason: "json: truncated unicode escape in key".into(),
+                    });
+                }
+                let hex = &raw[i..i + 4];
+                let code = u16::from_str_radix(hex, 16).map_err(|_| IpcError::InvalidFrame {
+                    reason: "json: invalid unicode escape in key".into(),
+                })?;
+                i += 4;
+                if (0xD800..=0xDBFF).contains(&code) {
+                    if i + 6 > bytes.len() || &bytes[i..i + 2] != b"\\u" {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: unpaired high surrogate in key".into(),
+                        });
+                    }
+                    let low_hex = &raw[i + 2..i + 6];
+                    let low =
+                        u16::from_str_radix(low_hex, 16).map_err(|_| IpcError::InvalidFrame {
+                            reason: "json: invalid surrogate escape in key".into(),
+                        })?;
+                    if !(0xDC00..=0xDFFF).contains(&low) {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: invalid low surrogate in key".into(),
+                        });
+                    }
+                    i += 6;
+                    let combined =
+                        0x10000 + (((code as u32 - 0xD800) << 10) | (low as u32 - 0xDC00));
+                    let Some(ch) = char::from_u32(combined) else {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: invalid surrogate codepoint in key".into(),
+                        });
+                    };
+                    out.push(ch);
+                } else if (0xDC00..=0xDFFF).contains(&code) {
+                    return Err(IpcError::InvalidFrame {
+                        reason: "json: lone low surrogate in key".into(),
+                    });
+                } else if let Some(ch) = char::from_u32(u32::from(code)) {
+                    out.push(ch);
+                }
+            }
+            _ => {
+                return Err(IpcError::InvalidFrame {
+                    reason: "json: invalid escape sequence in key".into(),
+                });
+            }
+        }
+    }
+    Ok(std::borrow::Cow::Owned(out))
 }
 
 /// Validate that the top-level JSON object does not contain ambient authority
@@ -283,7 +397,7 @@ pub fn validate_no_ambient_auth(json: &[u8]) -> Result<(), IpcError> {
                             next_idx += 1;
                         }
                         if next_idx < bytes.len() && bytes[next_idx] == b':' {
-                            let key = &s[start..i];
+                            let key = unescape_json_key(&s[start..i])?;
                             if key == "auth" || key == "scope" || key == "role" {
                                 return Err(IpcError::InvalidRequest {
                                     reason: format!(
@@ -308,7 +422,15 @@ pub fn validate_no_ambient_auth(json: &[u8]) -> Result<(), IpcError> {
             b'{' => container_stack.push(b'{'),
             b'[' => container_stack.push(b'['),
             b'}' | b']' => {
-                container_stack.pop();
+                let expected_open = if b == b'}' { b'{' } else { b'[' };
+                match container_stack.pop() {
+                    Some(open) if open == expected_open => {}
+                    _ => {
+                        return Err(IpcError::InvalidFrame {
+                            reason: "json: mismatched closing bracket".into(),
+                        });
+                    }
+                }
             }
             _ => {}
         }
@@ -476,6 +598,14 @@ mod tests {
         assert!(validate_no_ambient_auth(br#"{"cmd":"foo\"scope"}"#).is_ok());
         assert!(validate_no_ambient_auth(br#"{"foo\\\"scope":1}"#).is_ok());
         assert!(validate_no_ambient_auth(br#"["foo\"auth"]"#).is_ok());
+        // Unicode-escaped forbidden keys must be rejected
+        assert!(validate_no_ambient_auth(br#"{"s\u0063ope":"admin"}"#).is_err());
+        assert!(validate_no_ambient_auth(br#"{"\u0061uth":"token"}"#).is_err());
+        assert!(validate_no_ambient_auth(br#"{"r\u006fle":"admin"}"#).is_err());
+        // Mismatched brackets must be rejected by both depth and ambient-auth validators
+        assert!(validate_json_depth(br#"{]"#, 32).is_err());
+        assert!(validate_json_depth(br#"[{"a": 1], "scope": "admin"}"#, 32).is_err());
+        assert!(validate_no_ambient_auth(br#"[{"a": 1], "scope": "admin"}"#).is_err());
     }
 
     #[test]
