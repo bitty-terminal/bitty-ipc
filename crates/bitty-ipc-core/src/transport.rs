@@ -215,7 +215,7 @@ impl StdioTransportStub {
         let frames = framer.push_bytes(wire)?;
         if !framer.is_empty() {
             return Err(IpcError::FrameTruncated {
-                expected: 4,
+                expected: framer.expected_frame_len(),
                 actual: framer.buffered_len(),
             });
         }
@@ -497,11 +497,23 @@ mod tests {
         // Truncated wire bytes
         let truncated = vec![0, 0, 0, 10, 1, 2, 3]; // declares 10 bytes, has 3
         let err = t.try_send_wire_bytes(&truncated).unwrap_err();
-        assert!(matches!(err, IpcError::FrameTruncated { .. }));
+        assert_eq!(
+            err,
+            IpcError::FrameTruncated {
+                expected: 14,
+                actual: 7,
+            }
+        );
 
         // Incomplete header
         let incomplete_header = vec![0, 0];
         let err = t.try_send_wire_bytes(&incomplete_header).unwrap_err();
-        assert!(matches!(err, IpcError::FrameTruncated { .. }));
+        assert_eq!(
+            err,
+            IpcError::FrameTruncated {
+                expected: 4,
+                actual: 2,
+            }
+        );
     }
 }

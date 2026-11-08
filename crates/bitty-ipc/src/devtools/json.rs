@@ -154,10 +154,8 @@ fn skip_value(bytes: &[u8], mut i: usize) -> Result<usize, ()> {
             Ok(end)
         }
         b'{' | b'[' => {
-            let open = bytes[i];
-            let close = if open == b'{' { b'}' } else { b']' };
+            let mut stack = vec![if bytes[i] == b'{' { b'}' } else { b']' }];
             i += 1;
-            let mut depth = 1usize;
             while i < bytes.len() {
                 match bytes[i] {
                     b'"' => {
@@ -165,10 +163,13 @@ fn skip_value(bytes: &[u8], mut i: usize) -> Result<usize, ()> {
                         i = end;
                         continue;
                     }
-                    b if b == open => depth += 1,
-                    b if b == close => {
-                        depth -= 1;
-                        if depth == 0 {
+                    b'{' => stack.push(b'}'),
+                    b'[' => stack.push(b']'),
+                    b'}' | b']' => {
+                        if stack.pop() != Some(bytes[i]) {
+                            return Err(());
+                        }
+                        if stack.is_empty() {
                             return Ok(i + 1);
                         }
                     }
@@ -179,9 +180,18 @@ fn skip_value(bytes: &[u8], mut i: usize) -> Result<usize, ()> {
             Err(())
         }
         _ => {
-            // Number, true, false, null: run to the next delimiter.
+            // Number, true, false, null: run to the next delimiter or whitespace,
+            // rejecting structural/quote characters inside a scalar token.
             let start = i;
-            while i < bytes.len() && !matches!(bytes[i], b',' | b'}' | b']') {
+            while i < bytes.len()
+                && !matches!(
+                    bytes[i],
+                    b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'
+                )
+            {
+                if matches!(bytes[i], b'"' | b'{' | b'[' | b':') {
+                    return Err(());
+                }
                 i += 1;
             }
             if i == start {
@@ -533,4 +543,18 @@ pub(super) fn validate_method(method: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_envelope_keys_rejects_missing_comma_after_scalar_and_mismatched_brackets() {
+        assert!(collect_envelope_keys(r#"{"v": 1 "scope": "admin"}"#).is_err());
+        assert!(collect_envelope_keys(r#"{"params": {"a": [1, 2}}}"#).is_err());
+        let ok = collect_envelope_keys(r#"{"id": "1", "method": "bitty.debug/ping", "params": null}"#)
+            .expect("valid envelope");
+        assert_eq!(ok.values.len(), 3);
+    }
 }
