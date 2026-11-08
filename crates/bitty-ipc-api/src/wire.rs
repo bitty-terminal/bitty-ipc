@@ -293,7 +293,9 @@ fn unescape_json_key(raw: &str) -> Result<std::borrow::Cow<'_, str>, IpcError> {
                         reason: "json: truncated unicode escape in key".into(),
                     });
                 }
-                let hex = &raw[i..i + 4];
+                let hex = raw.get(i..i + 4).ok_or_else(|| IpcError::InvalidFrame {
+                    reason: "json: invalid unicode escape in key".into(),
+                })?;
                 let code = u16::from_str_radix(hex, 16).map_err(|_| IpcError::InvalidFrame {
                     reason: "json: invalid unicode escape in key".into(),
                 })?;
@@ -304,7 +306,11 @@ fn unescape_json_key(raw: &str) -> Result<std::borrow::Cow<'_, str>, IpcError> {
                             reason: "json: unpaired high surrogate in key".into(),
                         });
                     }
-                    let low_hex = &raw[i + 2..i + 6];
+                    let low_hex = raw
+                        .get(i + 2..i + 6)
+                        .ok_or_else(|| IpcError::InvalidFrame {
+                            reason: "json: invalid surrogate escape in key".into(),
+                        })?;
                     let low =
                         u16::from_str_radix(low_hex, 16).map_err(|_| IpcError::InvalidFrame {
                             reason: "json: invalid surrogate escape in key".into(),
@@ -602,6 +608,9 @@ mod tests {
         assert!(validate_no_ambient_auth(br#"{"s\u0063ope":"admin"}"#).is_err());
         assert!(validate_no_ambient_auth(br#"{"\u0061uth":"token"}"#).is_err());
         assert!(validate_no_ambient_auth(br#"{"r\u006fle":"admin"}"#).is_err());
+        // Non-ASCII bytes inside \uXXXX escapes must return Err without panicking on UTF-8 char boundaries
+        assert!(validate_no_ambient_auth(r#"{"\u0éé":1}"#.as_bytes()).is_err());
+        assert!(validate_no_ambient_auth(r#"{"\ud83d\u0éé":1}"#.as_bytes()).is_err());
         // Mismatched brackets must be rejected by both depth and ambient-auth validators
         assert!(validate_json_depth(br#"{]"#, 32).is_err());
         assert!(validate_json_depth(br#"[{"a": 1], "scope": "admin"}"#, 32).is_err());
