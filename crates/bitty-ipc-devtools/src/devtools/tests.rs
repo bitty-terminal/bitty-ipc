@@ -5801,127 +5801,157 @@ fn plugin_runtime_v1_methods_registered_and_mcp_hidden() {
     }
 }
 
+/// The exact debug scope each accepted v1 plugin-runtime method requires.
+///
+/// devtools RFC "Scopes": `debug.inspect`, `debug.trace`, and
+/// `debug.control` are independent grants — no scope is implied by the
+/// connection or by holding another scope (P0-AC-025). The matrix below is
+/// written from this table rather than from the handler gates, so a wrong
+/// gate cannot restate its own expectation.
+const PLUGIN_RUNTIME_EXACT_SCOPE_MATRIX: &[(&str, bitty_ipc_api::scope::Scope, &str)] = &[
+    (
+        METHOD_LIST_PLUGINS,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"generation\":null}",
+    ),
+    (
+        METHOD_GET_PLUGIN,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"pluginId\":\"p\"}",
+    ),
+    (
+        METHOD_LIST_SUBSCRIPTIONS,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"pluginId\":\"p\"}",
+    ),
+    (
+        METHOD_GET_BUDGETS,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"pluginId\":\"p\",\"generation\":2}",
+    ),
+    (
+        METHOD_GET_QUEUE_SNAPSHOT,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"pluginId\":\"p\"}",
+    ),
+    (
+        METHOD_LIST_HANDLES,
+        bitty_ipc_api::scope::Scope::DebugInspect,
+        "{\"pluginId\":\"p\"}",
+    ),
+    (
+        METHOD_STREAM_EVENTS,
+        bitty_ipc_api::scope::Scope::DebugTrace,
+        "{\"types\":[\"a\"],\"batch\":{\"maxEvents\":8,\"maxBytes\":1024}}",
+    ),
+    (
+        METHOD_SUSPEND_HANDLER,
+        bitty_ipc_api::scope::Scope::DebugControl,
+        "{\"pluginId\":\"p\",\"handlerId\":\"h\",\"cause\":\"c\"}",
+    ),
+    (
+        METHOD_RESUME_PLUGIN,
+        bitty_ipc_api::scope::Scope::DebugControl,
+        "{\"pluginId\":\"p\",\"generation\":2}",
+    ),
+    (
+        METHOD_DISPOSE_GENERATION,
+        bitty_ipc_api::scope::Scope::DebugControl,
+        "{\"pluginId\":\"p\",\"generation\":2}",
+    ),
+];
+
 #[test]
-fn plugin_runtime_scope_matrix_per_rfc() {
-    // RFC scope table: six readers need `debug.inspect` (any debug scope
-    // reads), `streamEvents` needs `debug.trace` (or `control`), and the
-    // three lifecycle verbs need exactly `debug.control`. Connection alone
-    // grants nothing: every method denies with `scope`/`ScopeDenied`.
+fn plugin_runtime_scope_matrix_is_exact_per_method() {
+    // RFC verification plan item 1 (P0-AC-025 parity): every matrix cell is a
+    // negative test, so the matrix is enumerated in full — 10 methods x 8
+    // grant subsets (empty plus every combination of the three independent
+    // debug scopes) = 80 cells — instead of a hand-picked sample.
+    //
+    // The plugin runtime is detached in this slice, so an admitted cell always
+    // answers `capability`/`PluginRuntimeUnavailable` and a denied cell must
+    // always answer `scope`/`ScopeDenied`. A gate that admits a caller which
+    // does not hold the required scope therefore shows up as a
+    // `PluginRuntimeUnavailable` in a denied cell, which is exactly the
+    // runtime-attachment oracle the any-of gate leaked.
+    use bitty_ipc_api::scope::Scope::{DebugControl, DebugInspect, DebugTrace};
+
     let dispatcher = Dispatcher::with_defaults();
     let server = test_server_info();
-    let (empty, inspect, trace, control, _full) = plugin_runtime_scopes();
-    let readers = [
-        (METHOD_LIST_PLUGINS, "{\"generation\":null}"),
-        (METHOD_GET_PLUGIN, "{\"pluginId\":\"p\"}"),
-        (METHOD_LIST_SUBSCRIPTIONS, "{\"pluginId\":\"p\"}"),
-        (METHOD_GET_BUDGETS, "{\"pluginId\":\"p\",\"generation\":2}"),
-        (METHOD_GET_QUEUE_SNAPSHOT, "{\"pluginId\":\"p\"}"),
-        (METHOD_LIST_HANDLES, "{\"pluginId\":\"p\"}"),
-    ];
-    let stream = [(
-        METHOD_STREAM_EVENTS,
-        "{\"types\":[\"a\"],\"batch\":{\"maxEvents\":8,\"maxBytes\":1024}}",
-    )];
-    let verbs = [
+    let grants: [(&str, &[bitty_ipc_api::scope::Scope]); 8] = [
+        ("none", &[]),
+        ("inspect", &[DebugInspect]),
+        ("trace", &[DebugTrace]),
+        ("control", &[DebugControl]),
+        ("inspect+trace", &[DebugInspect, DebugTrace]),
+        ("inspect+control", &[DebugInspect, DebugControl]),
+        ("trace+control", &[DebugTrace, DebugControl]),
         (
-            METHOD_SUSPEND_HANDLER,
-            "{\"pluginId\":\"p\",\"handlerId\":\"h\",\"cause\":\"c\"}",
-        ),
-        (
-            METHOD_RESUME_PLUGIN,
-            "{\"pluginId\":\"p\",\"generation\":2}",
-        ),
-        (
-            METHOD_DISPOSE_GENERATION,
-            "{\"pluginId\":\"p\",\"generation\":2}",
+            "inspect+trace+control",
+            &[DebugInspect, DebugTrace, DebugControl],
         ),
     ];
-    // Zero scopes: everything denies with typed scope, zero partial state.
-    for (method, params) in readers.iter().chain(stream.iter()).chain(verbs.iter()) {
-        let ctx = ServeContext::with_granted_for_tests(&server, empty.clone());
-        let outcome = handle_envelope(&plugin_runtime_envelope(method, params), &dispatcher, &ctx);
-        assert!(outcome.was_error, "{method} must deny with zero scopes");
-        let text = response_text(&outcome);
-        assert_eq!(
-            error_category(&text).as_deref(),
-            Some("scope"),
-            "{method} denial must be typed scope: {text}"
-        );
-        assert!(
-            text.contains("\"code\":\"ScopeDenied\""),
-            "{method} got: {text}"
-        );
+
+    let (mut admitted, mut refused) = (0usize, 0usize);
+    for &(method, required, params) in PLUGIN_RUNTIME_EXACT_SCOPE_MATRIX {
+        for &(grant, granted) in &grants {
+            let mut set = bitty_ipc_api::scope::ScopeSet::new();
+            for scope in granted {
+                set.insert(*scope);
+            }
+            let ctx = ServeContext::with_granted_for_tests(&server, set);
+            let outcome =
+                handle_envelope(&plugin_runtime_envelope(method, params), &dispatcher, &ctx);
+            let text = response_text(&outcome);
+            let cell = format!("{method} with {{{grant}}}");
+            if granted.contains(&required) {
+                admitted += 1;
+                assert!(
+                    !text.contains("ScopeDenied"),
+                    "{cell} holds '{}' and must be admitted: {text}",
+                    required.as_str()
+                );
+                assert!(
+                    text.contains("PluginRuntimeUnavailable"),
+                    "{cell} admitted cell must reach the fail-closed stub verdict: {text}"
+                );
+            } else {
+                refused += 1;
+                assert!(outcome.was_error, "{cell} must deny");
+                assert_eq!(
+                    error_category(&text).as_deref(),
+                    Some("scope"),
+                    "{cell} denial must be typed scope: {text}"
+                );
+                assert!(
+                    text.contains("\"code\":\"ScopeDenied\""),
+                    "{cell} denial must be ScopeDenied: {text}"
+                );
+                assert!(
+                    text.contains(&format!("scope '{}'", required.as_str())),
+                    "{cell} refusal must name the scope it requires ('{}'): {text}",
+                    required.as_str()
+                );
+                for held in granted {
+                    assert!(
+                        !text.contains(&format!("scope '{}'", held.as_str())),
+                        "{cell} must not be told it lacks '{}', which it holds: {text}",
+                        held.as_str()
+                    );
+                }
+                assert!(
+                    !text.contains("PluginRuntimeUnavailable"),
+                    "{cell} must not reach the runtime verdict through a scope it lacks: {text}"
+                );
+            }
+        }
     }
-    // Inspect-only: readers are callable (fail-closed stub verdict, not a
-    // scope denial); the stream and the verbs still deny.
-    let inspect_ctx = ServeContext::with_granted_for_tests(&server, inspect);
-    for (method, params) in readers {
-        let outcome = handle_envelope(
-            &plugin_runtime_envelope(method, params),
-            &dispatcher,
-            &inspect_ctx,
-        );
-        assert!(outcome.was_error, "{method} stub must fail closed");
-        let text = response_text(&outcome);
-        assert!(
-            text.contains("PluginRuntimeUnavailable"),
-            "{method} got: {text}"
-        );
-    }
-    for (method, params) in stream.iter().chain(verbs.iter()) {
-        let outcome = handle_envelope(
-            &plugin_runtime_envelope(method, params),
-            &dispatcher,
-            &inspect_ctx,
-        );
-        assert!(outcome.was_error, "{method} must deny inspect-only");
-        assert!(
-            response_text(&outcome).contains("ScopeDenied"),
-            "{method} got: {}",
-            response_text(&outcome)
-        );
-    }
-    // Trace-only: the stream is callable; the control verbs still deny.
-    let trace_ctx = ServeContext::with_granted_for_tests(&server, trace);
-    let outcome = handle_envelope(
-        &plugin_runtime_envelope(stream[0].0, stream[0].1),
-        &dispatcher,
-        &trace_ctx,
+    assert_eq!(
+        (admitted, refused),
+        (40, 40),
+        "6 readers x 4 inspect-bearing grants + streamEvents x 4 trace-bearing grants \
+         + 3 verbs x 4 control-bearing grants"
     );
-    assert!(outcome.was_error);
-    assert!(
-        response_text(&outcome).contains("PluginRuntimeUnavailable"),
-        "streamEvents got: {}",
-        response_text(&outcome)
-    );
-    for (method, params) in verbs {
-        let outcome = handle_envelope(
-            &plugin_runtime_envelope(method, params),
-            &dispatcher,
-            &trace_ctx,
-        );
-        assert!(outcome.was_error, "{method} must deny trace-only");
-        assert!(
-            response_text(&outcome).contains("ScopeDenied"),
-            "{method} got: {}",
-            response_text(&outcome)
-        );
-    }
-    // Control-only: the verbs are callable.
-    let control_ctx = ServeContext::with_granted_for_tests(&server, control);
-    for (method, params) in verbs {
-        let outcome = handle_envelope(
-            &plugin_runtime_envelope(method, params),
-            &dispatcher,
-            &control_ctx,
-        );
-        assert!(outcome.was_error, "{method} stub must fail closed");
-        assert!(
-            response_text(&outcome).contains("PluginRuntimeUnavailable"),
-            "{method} got: {}",
-            response_text(&outcome)
-        );
-    }
 }
 
 #[test]

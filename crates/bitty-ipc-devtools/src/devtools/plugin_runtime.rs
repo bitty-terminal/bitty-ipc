@@ -60,42 +60,32 @@ const MAX_BATCH_BYTES: u64 = 8 * 1024;
 
 // ── scope gates ─────────────────────────────────────────────────────────────
 
-/// Require any debug scope (the accepted read surface: `debug.inspect` or
-/// the wider `debug.trace` / `debug.control`).
-fn require_inspect_scope(context: &ServeContext, method: &str) -> Result<(), HandlerError> {
-    if context.has_any_scope(&[Scope::DebugInspect, Scope::DebugTrace, Scope::DebugControl]) {
+/// Require exactly `scope` for `method`.
+///
+/// The three debug scopes are independent grants: `debug.trace` and
+/// `debug.control` imply neither `debug.inspect` nor each other (devtools RFC
+/// "Scopes": "no scope is implied by connection or by holding another scope";
+/// P0-AC-025). An any-of check here admitted a `debug.trace`-only or
+/// `debug.control`-only caller through the `debug.inspect` gate, so a client
+/// that may not read lifecycle metadata could still enumerate plugin rows, and
+/// could tell an attached runtime from a detached one by whether the call
+/// returned rows or the typed `PluginRuntimeUnavailable` verdict.
+///
+/// The refusal keeps the accepted fail-closed `scope`/`ScopeDenied` shape and
+/// names the scope the method actually requires. A caller that holds no debug
+/// scope sees the refusal it always saw; a caller that holds a different debug
+/// scope now receives it instead of being admitted through the wrong gate.
+fn require_scope(context: &ServeContext, scope: Scope, method: &str) -> Result<(), HandlerError> {
+    if context.has_scope(scope) {
         return Ok(());
     }
     Err(HandlerError::new(
         "scope",
         "ScopeDenied",
-        format!("permission denied: scope 'debug.inspect' denied for {method} (needs elevation)"),
-    ))
-}
-
-/// Require `debug.trace` (or the wider `debug.control`) for the event
-/// stream, mirroring the trace-lifecycle gate.
-fn require_trace_scope(context: &ServeContext, method: &str) -> Result<(), HandlerError> {
-    if context.has_scope(Scope::DebugTrace) || context.has_scope(Scope::DebugControl) {
-        return Ok(());
-    }
-    Err(HandlerError::new(
-        "scope",
-        "ScopeDenied",
-        format!("permission denied: scope 'debug.trace' denied for {method} (needs elevation)"),
-    ))
-}
-
-/// Require exactly `debug.control` for lifecycle verbs (generation suspend,
-/// resume, disposal affect live VM state).
-fn require_control_scope(context: &ServeContext, method: &str) -> Result<(), HandlerError> {
-    if context.has_scope(Scope::DebugControl) {
-        return Ok(());
-    }
-    Err(HandlerError::new(
-        "scope",
-        "ScopeDenied",
-        format!("permission denied: scope 'debug.control' denied for {method} (needs elevation)"),
+        format!(
+            "permission denied: scope '{}' denied for {method} (needs elevation)",
+            scope.as_str()
+        ),
     ))
 }
 
@@ -233,7 +223,7 @@ pub(super) fn handle_list_plugins(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_LIST_PLUGINS)?;
+    require_scope(context, Scope::DebugInspect, super::METHOD_LIST_PLUGINS)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     if !params.trim_start().starts_with('{') {
         return Err(HandlerError::new(
@@ -263,7 +253,7 @@ pub(super) fn handle_get_plugin(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_GET_PLUGIN)?;
+    require_scope(context, Scope::DebugInspect, super::METHOD_GET_PLUGIN)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "getPlugin")?;
     Err(plugin_runtime_unavailable(super::METHOD_GET_PLUGIN))
@@ -274,7 +264,11 @@ pub(super) fn handle_list_subscriptions(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_LIST_SUBSCRIPTIONS)?;
+    require_scope(
+        context,
+        Scope::DebugInspect,
+        super::METHOD_LIST_SUBSCRIPTIONS,
+    )?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "listSubscriptions")?;
     Err(plugin_runtime_unavailable(super::METHOD_LIST_SUBSCRIPTIONS))
@@ -286,7 +280,7 @@ pub(super) fn handle_get_budgets(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_GET_BUDGETS)?;
+    require_scope(context, Scope::DebugInspect, super::METHOD_GET_BUDGETS)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "getBudgets")?;
     let _generation = require_generation(params, "getBudgets")?;
@@ -298,7 +292,11 @@ pub(super) fn handle_get_queue_snapshot(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_GET_QUEUE_SNAPSHOT)?;
+    require_scope(
+        context,
+        Scope::DebugInspect,
+        super::METHOD_GET_QUEUE_SNAPSHOT,
+    )?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "getQueueSnapshot")?;
     Err(plugin_runtime_unavailable(super::METHOD_GET_QUEUE_SNAPSHOT))
@@ -309,7 +307,7 @@ pub(super) fn handle_list_handles(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_inspect_scope(context, super::METHOD_LIST_HANDLES)?;
+    require_scope(context, Scope::DebugInspect, super::METHOD_LIST_HANDLES)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "listHandles")?;
     Err(plugin_runtime_unavailable(super::METHOD_LIST_HANDLES))
@@ -474,7 +472,7 @@ pub(super) fn handle_stream_events(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_trace_scope(context, super::METHOD_STREAM_EVENTS)?;
+    require_scope(context, Scope::DebugTrace, super::METHOD_STREAM_EVENTS)?;
     let params = request.params_raw.as_deref().ok_or_else(|| {
         HandlerError::new(
             "usage",
@@ -561,7 +559,7 @@ pub(super) fn handle_suspend_handler(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_control_scope(context, super::METHOD_SUSPEND_HANDLER)?;
+    require_scope(context, Scope::DebugControl, super::METHOD_SUSPEND_HANDLER)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "suspendHandler")?;
     let handler_id = top_string(params, "handlerId").ok_or_else(|| {
@@ -602,7 +600,7 @@ pub(super) fn handle_resume_plugin(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_control_scope(context, super::METHOD_RESUME_PLUGIN)?;
+    require_scope(context, Scope::DebugControl, super::METHOD_RESUME_PLUGIN)?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "resumePlugin")?;
     let _generation = require_generation(params, "resumePlugin")?;
@@ -615,7 +613,11 @@ pub(super) fn handle_dispose_generation(
     context: &ServeContext,
     request: &DevtoolsRequest,
 ) -> Result<String, HandlerError> {
-    require_control_scope(context, super::METHOD_DISPOSE_GENERATION)?;
+    require_scope(
+        context,
+        Scope::DebugControl,
+        super::METHOD_DISPOSE_GENERATION,
+    )?;
     let params = request.params_raw.as_deref().unwrap_or("{}");
     let _plugin_id = require_plugin_id(params, "disposeGeneration")?;
     let _generation = require_generation(params, "disposeGeneration")?;
