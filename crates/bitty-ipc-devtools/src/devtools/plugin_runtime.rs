@@ -72,9 +72,9 @@ const MAX_BATCH_BYTES: u64 = 8 * 1024;
 /// returned rows or the typed `PluginRuntimeUnavailable` verdict.
 ///
 /// The refusal keeps the accepted fail-closed `scope`/`ScopeDenied` shape and
-/// names the scope the method actually requires, so the typed refusal a caller
-/// sees is unchanged apart from no longer being issued to a caller that does
-/// not hold the scope.
+/// names the scope the method actually requires. A caller that holds no debug
+/// scope sees the refusal it always saw; a caller that holds a different debug
+/// scope now receives it instead of being admitted through the wrong gate.
 fn require_scope(context: &ServeContext, scope: Scope, method: &str) -> Result<(), HandlerError> {
     if context.has_scope(scope) {
         return Ok(());
